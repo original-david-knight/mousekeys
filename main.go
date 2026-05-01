@@ -146,7 +146,7 @@ func runClientCommand(command string, args []string, log *logger) error {
 }
 
 func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder) error {
-	return runDaemonLoop(ctx, log, trace, NewStubDaemonController(trace))
+	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedStubDaemonController(trace))
 }
 
 func runDaemonLoop(ctx context.Context, log *logger, trace TraceRecorder, controller *DaemonController) error {

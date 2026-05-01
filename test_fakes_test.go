@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -55,15 +56,23 @@ type fakeHyprlandIPCResponder struct {
 
 func newFakeHyprlandIPCResponder(t *testing.T, monitors []Monitor) *fakeHyprlandIPCResponder {
 	t.Helper()
+	return newFakeHyprlandIPCResponderAtPath(t, filepath.Join(t.TempDir(), HyprlandCommandSocketName), monitors)
+}
+
+func newFakeHyprlandIPCResponderAtPath(t *testing.T, socketPath string, monitors []Monitor) *fakeHyprlandIPCResponder {
+	t.Helper()
 	return &fakeHyprlandIPCResponder{
 		t:          t,
-		socketPath: filepath.Join(t.TempDir(), ".socket.sock"),
+		socketPath: socketPath,
 		monitors:   append([]Monitor(nil), monitors...),
 	}
 }
 
 func (r *fakeHyprlandIPCResponder) Start() string {
 	r.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(r.socketPath), 0o700); err != nil {
+		r.t.Fatalf("create fake Hyprland IPC socket directory: %v", err)
+	}
 	listener, err := net.Listen("unix", r.socketPath)
 	if err != nil {
 		r.t.Fatalf("listen on fake Hyprland IPC socket: %v", err)
@@ -120,14 +129,21 @@ func (r *fakeHyprlandIPCResponder) Requests() []string {
 func hyprlandMonitorFixtures(monitors []Monitor) []map[string]any {
 	out := make([]map[string]any, 0, len(monitors))
 	for _, monitor := range monitors {
+		physicalWidth := monitor.Width
+		physicalHeight := monitor.Height
+		if monitor.Scale > 0 {
+			physicalWidth = int(math.Round(float64(monitor.Width) * monitor.Scale))
+			physicalHeight = int(math.Round(float64(monitor.Height) * monitor.Scale))
+		}
 		out = append(out, map[string]any{
-			"name":    monitor.Name,
-			"x":       monitor.X,
-			"y":       monitor.Y,
-			"width":   monitor.Width,
-			"height":  monitor.Height,
-			"scale":   monitor.Scale,
-			"focused": monitor.Focused,
+			"name":      monitor.Name,
+			"x":         monitor.X,
+			"y":         monitor.Y,
+			"width":     physicalWidth,
+			"height":    physicalHeight,
+			"scale":     monitor.Scale,
+			"transform": 0,
+			"focused":   monitor.Focused,
 		})
 	}
 	return out

@@ -200,7 +200,7 @@ tasks:
         over a test socket. Document an optional real-Hyprland smoke path in the
         task notes, but do not make a live desktop session required for this task
         to pass.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

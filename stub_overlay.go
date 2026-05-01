@@ -20,6 +20,14 @@ func NewStubDaemonController(trace TraceRecorder) *DaemonController {
 	})
 }
 
+func NewHyprlandBackedStubDaemonController(trace TraceRecorder) *DaemonController {
+	return NewDaemonController(DaemonDeps{
+		MonitorLookup: NewHyprlandIPCClientFromEnv(),
+		Overlay:       stubOverlayBackend{},
+		Trace:         trace,
+	})
+}
+
 type staticFocusedMonitorLookup struct {
 	monitor Monitor
 }

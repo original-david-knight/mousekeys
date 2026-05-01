@@ -11,3 +11,6 @@ tasks:
     - id: ipc-socket-and-toggle
       status: done
       notes: Implemented newline-delimited JSON IPC on $XDG_RUNTIME_DIR/mousekeys.sock with stale-socket cleanup, live-daemon refusal, show toggle/hide/status commands, and stub overlay deps. Tests cover temp runtime dirs, cleanup, duplicate daemon refusal, state transitions, and no pointer events on toggle. The layer-shell task can replace stub overlay deps without changing the IPC surface.
+    - id: hyprland-focused-monitor
+      status: done
+      notes: 'Implemented Hyprland .socket.sock client using XDG_RUNTIME_DIR/hypr/HYPRLAND_INSTANCE_SIGNATURE and j/monitors; it normalizes Hyprland pixel dimensions plus scale to logical monitor size and preserves non-zero origins. Automated gate uses fake Unix-socket responders for success, missing env/socket, malformed JSON, and no focused monitor. Optional real smoke: in a Hyprland session compare mousekeys show behavior with hyprctl -j monitors focused output; no live desktop is required.'
