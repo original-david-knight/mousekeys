@@ -1,0 +1,7 @@
+tasks:
+    - id: bootstrap-cli-skeleton
+      status: done
+      notes: Initialized stdlib-only Go module and CLI binary. Daemon validates XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE before entering a signal-aware stub loop. Logger writes JSON to stderr, defaults to info, and enables debug with MOUSEKEYS_LOG=debug; IPC remains TODO for the later socket/toggle task.
+    - id: test-harness-and-observability
+      status: done
+      notes: Added thin internal boundaries, deterministic fakes, ARGB snapshot/hash helpers, fake clock timers, and optional JSONL tracing. Current daemon remains a stub; future protocol tasks can test through injected interfaces without live Hyprland/Wayland, while go build/test/vet pass.

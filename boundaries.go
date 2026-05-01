@@ -1,0 +1,168 @@
+package main
+
+import (
+	"context"
+	"time"
+)
+
+type Monitor struct {
+	Name    string
+	X       int
+	Y       int
+	Width   int
+	Height  int
+	Scale   float64
+	Focused bool
+}
+
+func (m Monitor) LocalRect() Rect {
+	return Rect{Width: m.Width, Height: m.Height}
+}
+
+func (m Monitor) LocalToVirtual(p Point) Point {
+	return Point{X: m.X + p.X, Y: m.Y + p.Y}
+}
+
+func (m Monitor) ContainsLocal(p Point) bool {
+	return p.X >= 0 && p.Y >= 0 && p.X < m.Width && p.Y < m.Height
+}
+
+type Point struct {
+	X int
+	Y int
+}
+
+type Rect struct {
+	X      int
+	Y      int
+	Width  int
+	Height int
+}
+
+func (r Rect) Center() Point {
+	return Point{
+		X: r.X + r.Width/2,
+		Y: r.Y + r.Height/2,
+	}
+}
+
+type FocusedMonitorLookup interface {
+	FocusedMonitor(context.Context) (Monitor, error)
+}
+
+type WaylandOverlayBackend interface {
+	Outputs(context.Context) ([]Monitor, error)
+	CreateSurface(context.Context, Monitor) (OverlaySurface, error)
+}
+
+type OverlaySurface interface {
+	ID() string
+	Configure(context.Context, SurfaceConfig) error
+	GrabKeyboard(context.Context) error
+	Render(context.Context, ARGBBuffer) error
+	Destroy(context.Context) error
+}
+
+type SurfaceConfig struct {
+	OutputName string
+	Width      int
+	Height     int
+	Scale      float64
+}
+
+type KeyboardEventSource interface {
+	Events(context.Context) (<-chan KeyboardEvent, error)
+}
+
+type KeyboardEvent struct {
+	Key     string
+	Pressed bool
+	Time    time.Time
+}
+
+type PointerSynthesizer interface {
+	Motion(context.Context, PointerMotion) error
+	Button(context.Context, PointerButtonEvent) error
+	Frame(context.Context, PointerFrame) error
+}
+
+type PointerButton string
+
+const (
+	PointerButtonLeft  PointerButton = "left"
+	PointerButtonRight PointerButton = "right"
+)
+
+type ButtonState string
+
+const (
+	ButtonDown ButtonState = "down"
+	ButtonUp   ButtonState = "up"
+)
+
+type PointerMotion struct {
+	OutputName string
+	X          int
+	Y          int
+	Time       time.Time
+	GroupID    string
+}
+
+type PointerButtonEvent struct {
+	OutputName string
+	X          int
+	Y          int
+	Button     PointerButton
+	State      ButtonState
+	Time       time.Time
+	GroupID    string
+}
+
+type PointerFrame struct {
+	OutputName string
+	X          int
+	Y          int
+	Time       time.Time
+	GroupID    string
+}
+
+type RendererBufferSink interface {
+	Present(context.Context, string, ARGBBuffer) error
+}
+
+type Clock interface {
+	Now() time.Time
+	After(time.Duration) Timer
+}
+
+type Timer interface {
+	C() <-chan time.Time
+	Stop() bool
+	Reset(time.Duration) bool
+}
+
+type systemClock struct{}
+
+func (systemClock) Now() time.Time {
+	return time.Now()
+}
+
+func (systemClock) After(d time.Duration) Timer {
+	return &systemTimer{timer: time.NewTimer(d)}
+}
+
+type systemTimer struct {
+	timer *time.Timer
+}
+
+func (t *systemTimer) C() <-chan time.Time {
+	return t.timer.C
+}
+
+func (t *systemTimer) Stop() bool {
+	return t.timer.Stop()
+}
+
+func (t *systemTimer) Reset(d time.Duration) bool {
+	return t.timer.Reset(d)
+}

@@ -48,7 +48,6 @@ tasks:
         - go vet ./...
         - go test ./...
       commit_message: Bootstrap Go module, CLI skeleton, and structured logging
-      notes: Initialized stdlib-only Go module and CLI binary. Daemon validates XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE before entering a signal-aware stub loop. Logger writes JSON to stderr, defaults to info, and enables debug with MOUSEKEYS_LOG=debug; IPC remains TODO for the later socket/toggle task.
     - id: test-harness-and-observability
       title: Add deterministic test harness and debug instrumentation
       details: |
@@ -78,7 +77,7 @@ tasks:
         Later tasks must use these fakes for their automated tests instead of
         requiring a human to observe a real desktop. Real Hyprland smoke checks
         may still be documented as optional evidence when the environment exists.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

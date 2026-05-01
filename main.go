@@ -78,6 +78,12 @@ func runDaemonCommand(args []string, log *logger) error {
 		return fmt.Errorf("daemon requires Hyprland Wayland session environment; missing %s", strings.Join(missing, ", "))
 	}
 
+	trace, traceCloser, err := newTraceRecorderFromEnv(systemClock{})
+	if err != nil {
+		return err
+	}
+	defer traceCloser.Close()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -86,9 +92,14 @@ func runDaemonCommand(args []string, log *logger) error {
 		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
 		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),
 	})
+	trace.Record("state", "daemon_starting", map[string]any{
+		"xdg_runtime_dir":             os.Getenv("XDG_RUNTIME_DIR"),
+		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
+		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),
+	})
 	log.Debug("daemon entering stub loop", nil)
 
-	return runDaemonLoop(ctx, log)
+	return runDaemonLoopWithTrace(ctx, log, trace)
 }
 
 func runTODOCommand(command string, args []string, log *logger) error {
@@ -112,20 +123,26 @@ func runTODOCommand(command string, args []string, log *logger) error {
 	return nil
 }
 
-func runDaemonLoop(ctx context.Context, log *logger) error {
+func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder) error {
+	if trace == nil {
+		trace = noopTraceRecorder{}
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	trace.Record("state", "daemon_loop_started", nil)
 
 	for {
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.Canceled) {
 				log.Info("daemon stopping", nil)
+				trace.Record("state", "daemon_stopping", nil)
 				return nil
 			}
 			return ctx.Err()
 		case <-ticker.C:
 			log.Debug("daemon stub loop tick", nil)
+			trace.Record("io", "daemon_stub_tick", nil)
 		}
 	}
 }
