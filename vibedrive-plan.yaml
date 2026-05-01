@@ -241,7 +241,7 @@ tasks:
 
         Software-rendered shm buffers only — no EGL, GTK, or GPU-rendered
         overlays per PRD platform stack.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

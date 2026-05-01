@@ -14,3 +14,6 @@ tasks:
     - id: hyprland-focused-monitor
       status: done
       notes: 'Implemented Hyprland .socket.sock client using XDG_RUNTIME_DIR/hypr/HYPRLAND_INSTANCE_SIGNATURE and j/monitors; it normalizes Hyprland pixel dimensions plus scale to logical monitor size and preserves non-zero origins. Automated gate uses fake Unix-socket responders for success, missing env/socket, malformed JSON, and no focused monitor. Optional real smoke: in a Hyprland session compare mousekeys show behavior with hyprctl -j monitors focused output; no live desktop is required.'
+    - id: wayland-client-base
+      status: done
+      notes: Pinned pure-Go go-wayland runtime/scanner and checked in wlroots 0.18.2 XMLs plus generated bindings. Post-review fake-protocol tests now cover registry orchestration, xdg-output events, seat capability failures, focused-output matching, and shared client state is mutex-guarded with deadline-based roundtrip cancellation.
