@@ -160,7 +160,7 @@ tasks:
 
         For this task, the show/hide actions can call into a stub overlay
         interface that the layer-shell task later implements.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

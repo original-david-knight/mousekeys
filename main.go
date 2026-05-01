@@ -17,9 +17,9 @@ const usageText = `Usage:
 
 Commands:
   daemon    Run the long-lived Mouse Keys daemon
-  show      TODO: ask the daemon to show or toggle the overlay
-  hide      TODO: ask the daemon to hide the overlay
-  status    TODO: ask the daemon for current state
+  show      Ask the daemon to show or toggle the overlay
+  hide      Ask the daemon to hide the overlay
+  status    Ask the daemon for current state
 
 Options:
   -h, --help    Show this help text
@@ -52,7 +52,7 @@ func run(args []string, log *logger) error {
 	case "daemon":
 		return runDaemonCommand(commandArgs, log)
 	case "show", "hide", "status":
-		return runTODOCommand(command, commandArgs, log)
+		return runClientCommand(command, commandArgs, log)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usageText)
 	}
@@ -106,16 +106,16 @@ func runDaemonCommand(args []string, log *logger) error {
 		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
 		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),
 	})
-	log.Debug("daemon entering stub loop", nil)
+	log.Debug("daemon entering IPC loop", nil)
 
 	return runDaemonLoopWithTrace(ctx, log, trace)
 }
 
-func runTODOCommand(command string, args []string, log *logger) error {
+func runClientCommand(command string, args []string, log *logger) error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: mousekeys %s\n\nTODO: IPC wiring lands in ipc-socket-and-toggle.\n", command)
+		fmt.Fprintf(fs.Output(), "Usage: mousekeys %s\n\nSend %q to the running Mouse Keys daemon.\n", command, command)
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -127,33 +127,50 @@ func runTODOCommand(command string, args []string, log *logger) error {
 		return fmt.Errorf("%s: unexpected argument %q", command, fs.Arg(0))
 	}
 
-	log.Info("TODO: IPC wiring lands in ipc-socket-and-toggle", map[string]string{"command": command})
-	log.Debug("short-lived command completed", map[string]string{"command": command})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	response, err := SendIPCCommand(ctx, command)
+	if err != nil {
+		return err
+	}
+	if err := EncodeIPCResponse(os.Stdout, response); err != nil {
+		return err
+	}
+
+	log.Debug("short-lived IPC command completed", map[string]string{
+		"command": command,
+		"state":   response.State,
+	})
 	return nil
 }
 
 func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder) error {
+	return runDaemonLoop(ctx, log, trace, NewStubDaemonController(trace))
+}
+
+func runDaemonLoop(ctx context.Context, log *logger, trace TraceRecorder, controller *DaemonController) error {
 	if trace == nil {
 		trace = noopTraceRecorder{}
 	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	trace.Record("state", "daemon_loop_started", nil)
-
-	for {
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.Canceled) {
-				log.Info("daemon stopping", nil)
-				trace.Record("state", "daemon_stopping", nil)
-				return nil
-			}
-			return ctx.Err()
-		case <-ticker.C:
-			log.Debug("daemon stub loop tick", nil)
-			trace.Record("io", "daemon_stub_tick", nil)
-		}
+	server, err := NewIPCServerFromEnv(controller, log, trace)
+	if err != nil {
+		return err
 	}
+
+	trace.Record("state", "daemon_loop_started", nil)
+	log.Info("daemon IPC socket listening", map[string]string{"socket_path": server.SocketPath()})
+
+	err = server.Serve(ctx)
+	if closeErr := server.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	log.Info("daemon stopping", nil)
+	trace.Record("state", "daemon_stopping", nil)
+	return nil
 }
 
 func missingDaemonEnv() []string {

@@ -8,3 +8,6 @@ tasks:
     - id: config-toml-loader
       status: done
       notes: Added XDG-aware config.toml loading with first-start default creation, TOML missing-field defaulting, value validation, and xkbcommon-style key sequence parsing. Daemon now loads config once at startup; tests cover XDG temp dirs, defaults, user overrides, invalid values, and CGO-disabled fallback behavior.
+    - id: ipc-socket-and-toggle
+      status: done
+      notes: Implemented newline-delimited JSON IPC on $XDG_RUNTIME_DIR/mousekeys.sock with stale-socket cleanup, live-daemon refusal, show toggle/hide/status commands, and stub overlay deps. Tests cover temp runtime dirs, cleanup, duplicate daemon refusal, state transitions, and no pointer events on toggle. The layer-shell task can replace stub overlay deps without changing the IPC surface.
