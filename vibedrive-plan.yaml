@@ -1,0 +1,879 @@
+project:
+  name: mousekeys
+  objective: Build a keyboard-driven mouse control utility for Arch Linux + Hyprland that overlays a labeled grid and synthesizes pointer input via Wayland.
+  source_docs:
+    - IDEA.md
+    - PRD.md
+  constraint_files:
+    - PRD.md
+
+tasks:
+  - id: bootstrap-cli-skeleton
+    title: Bootstrap Go module, CLI skeleton, and structured logging
+    details: |
+      Initialize a Go module named "mousekeys" at the repo root. Create a single
+      binary with subcommands "daemon", "show", "hide", and "status" wired through
+      stdlib flag parsing or a minimal subcommand router (no third-party CLI
+      framework unless strictly necessary).
+
+      "daemon" should start a long-running process loop with stub handlers; "show",
+      "hide", and "status" should exit immediately after printing a TODO log line
+      (real wiring lands in ipc-socket-and-toggle).
+
+      Wire up a minimal structured logger that writes to stderr with "info"
+      (default) and "debug" levels (toggled via MOUSEKEYS_LOG=debug or, later, a
+      config setting), per the PRD logging section. systemd will capture stderr
+      into the journal, so do not add a custom file sink.
+
+      "go build ./..." must produce a static-friendly binary that runs on Arch
+      Linux. The daemon must depend on the Hyprland Wayland session env vars
+      (XDG_RUNTIME_DIR, WAYLAND_DISPLAY, HYPRLAND_INSTANCE_SIGNATURE); emit a
+      clear error when the daemon is launched without them rather than starting
+      and silently failing later.
+    workflow: implement
+    status: todo
+    deps: []
+    context_files:
+      - PRD.md
+      - IDEA.md
+    acceptance:
+      - Repo contains a valid go.mod for module name "mousekeys" with a Go toolchain version compatible with current Arch Linux.
+      - Build via "go build ./..." succeeds, and an explicit "go build -o .vibedrive/tmp/mousekeys ." produces a runnable mousekeys binary.
+      - Running mousekeys with --help lists at least the daemon, show, hide, and status subcommands.
+      - The "mousekeys daemon" subcommand exits with a clear error when WAYLAND_DISPLAY or HYPRLAND_INSTANCE_SIGNATURE are missing and stays running otherwise (a stub loop is acceptable for this task).
+      - Logger writes to stderr, defaults to info, and switches to debug when MOUSEKEYS_LOG=debug is set.
+      - Vetting via "go vet ./..." reports no issues.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - mkdir -p .vibedrive/tmp && go build -o .vibedrive/tmp/mousekeys .
+      - go build ./...
+      - go vet ./...
+      - go test ./...
+    commit_message: Bootstrap Go module, CLI skeleton, and structured logging
+
+  - id: test-harness-and-observability
+    title: Add deterministic test harness and debug instrumentation
+    details: |
+      Before implementing protocol-heavy behavior, add the testing and
+      observability foundation needed for an AI agent to verify correctness
+      without a live Hyprland desktop.
+
+      Introduce small internal interfaces for the external boundaries that must
+      be faked in tests: focused-monitor lookup, Wayland overlay backend,
+      keyboard event source, pointer synthesis, renderer buffer sink, and
+      clock/timer source. Keep the production implementations direct and thin;
+      this task is about making later behavior testable, not adding a parallel
+      product architecture.
+
+      Provide deterministic test fakes/helpers:
+      - fake Hyprland IPC responder with focused-monitor fixtures, including
+        non-zero virtual-layout origins and scale != 1.0
+      - fake Wayland registry/output/backend able to record surface create,
+        configure, render, keyboard-grab, and destroy events
+      - virtual-pointer event recorder that captures motion, frame, button
+        down/up, double-click grouping, coordinates, output name, and timestamps
+      - fake clock/timer source for double-click timeout tests
+      - ARGB buffer snapshot/hash helpers for renderer tests
+      - JSONL-style trace recorder for state transitions and IO actions,
+        enabled in tests and optionally by MOUSEKEYS_TRACE_JSONL in the daemon
+
+      Later tasks must use these fakes for their automated tests instead of
+      requiring a human to observe a real desktop. Real Hyprland smoke checks
+      may still be documented as optional evidence when the environment exists.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+    context_files:
+      - PRD.md
+    acceptance:
+      - Tests can exercise daemon state transitions, geometry, renderer buffers, keyboard events, and pointer output without a real Hyprland/Wayland session.
+      - Fake monitor fixtures include at least one non-zero virtual-layout origin and one scale != 1.0 output.
+      - Virtual-pointer recorder exposes enough structured events to assert exact click counts, coordinates, output names, and no intermediate grid re-open during double-click.
+      - Fake clock/timer source lets tests advance double_click_timeout_ms deterministically without sleeping.
+      - Renderer snapshot/hash helpers produce stable output across repeated test runs.
+      - Trace recorder can be enabled in tests and via MOUSEKEYS_TRACE_JSONL without changing normal stderr logging behavior.
+      - Unit tests demonstrate the fakes and trace recorder with at least one passing end-to-end stub flow.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add deterministic test harness and debug instrumentation
+
+  - id: config-toml-loader
+    title: Add TOML config loader with auto-created defaults
+    details: |
+      Implement loading of "~/.config/mousekeys/config.toml" per PRD configuration
+      section. Provide the documented defaults exactly: grid.size=26,
+      grid.subgrid_pixel_size=5, keybinds.left_click="Return",
+      keybinds.right_click="space", keybinds.double_click="Return Return",
+      keybinds.commit_partial="Tab", keybinds.exit="Escape",
+      keybinds.backspace="BackSpace", behavior.stay_active=true,
+      behavior.double_click_timeout_ms=250, appearance.grid_opacity=0.4,
+      appearance.grid_line_width=1, appearance.label_font_size=14.
+
+      The daemon must auto-create the config file with defaults on first start
+      when it is missing. Reload only on daemon restart — no live reload in v1.
+      Use the standard XDG config semantics for Linux so tests can set
+      XDG_CONFIG_HOME to a temporary directory and never write to the agent's
+      real home directory.
+
+      Key names must be xkbcommon keysym names, case-sensitive (e.g. Return,
+      space, Tab, Escape, BackSpace). Multi-key sequences (like "Return Return")
+      are space-separated. Validate the parsed config and emit clear errors on
+      invalid values.
+
+      The global trigger hotkey (Super+period) is intentionally NOT in this
+      config — it lives in the user's Hyprland config.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Daemon creates "~/.config/mousekeys/config.toml" with the documented defaults when missing on first start.
+      - Tests create configs under a temporary XDG_CONFIG_HOME and do not write to the real user home directory.
+      - Loading an existing config file applies user values and falls back to defaults for missing fields.
+      - Keybind values are parsed as space-separated xkbcommon keysym sequences and rejected with a clear error when invalid.
+      - Unit tests cover default generation, missing-field defaulting, invalid-value rejection, and keysym sequence parsing.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add TOML config loader with auto-created defaults
+
+  - id: ipc-socket-and-toggle
+    title: Add Unix-socket IPC with show toggle, hide, and status
+    details: |
+      Implement the v1 IPC protocol from the PRD over a Unix domain socket at
+      "$XDG_RUNTIME_DIR/mousekeys.sock". The daemon owns the socket on startup
+      and removes it on clean shutdown. Client subcommands "show", "hide", and
+      "status" connect to the socket and dispatch the corresponding command.
+
+      "show" must toggle the overlay off when the overlay is already shown,
+      behaving exactly like an Escape cancel — no click is emitted. "hide"
+      cancels and hides any active overlay (no-op when inactive). "status"
+      returns daemon state (e.g. active/inactive, pid, version).
+
+      The daemon must refuse to start if the socket path is occupied by another
+      live daemon (use a lockfile or connect-test before bind). Handle
+      socket-level errors with clear journal-friendly logs.
+
+      For this task, the show/hide actions can call into a stub overlay
+      interface that the layer-shell task later implements.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Daemon creates and owns "$XDG_RUNTIME_DIR/mousekeys.sock" while running and removes it on clean shutdown.
+      - Integration tests set XDG_RUNTIME_DIR to a temporary directory and leave no socket files behind.
+      - Two daemon instances cannot run simultaneously on the same socket path.
+      - The "mousekeys show" subcommand toggles the overlay off when already shown without emitting a click.
+      - The "mousekeys hide" subcommand cancels any active overlay and is a no-op when inactive.
+      - The "mousekeys status" subcommand returns structured state for the running daemon.
+      - Integration tests boot the daemon, send each command over the socket, and assert on responses and state transitions (overlay rendering may be stubbed for this task).
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add Unix-socket IPC with show toggle, hide, and status commands
+
+  - id: hyprland-focused-monitor
+    title: Query focused monitor from Hyprland IPC
+    details: |
+      Implement a Hyprland IPC client that queries the currently focused monitor
+      at trigger time. Use the HYPRLAND_INSTANCE_SIGNATURE environment variable
+      to locate the Hyprland control sockets under
+      "$XDG_RUNTIME_DIR/hypr/<sig>/".
+
+      Return a typed struct describing the focused monitor: name, virtual-layout
+      position (x, y origin), logical width/height, and scale. Downstream
+      overlay and pointer code needs all of these to render and target the
+      focused monitor, including the case where the focused monitor has a
+      non-zero virtual-layout origin (an explicit PRD acceptance gate).
+
+      Handle Hyprland IPC error cases: missing env var, missing socket,
+      malformed response. Provide unit tests with a fake Hyprland responder
+      over a test socket. Document an optional real-Hyprland smoke path in the
+      task notes, but do not make a live desktop session required for this task
+      to pass.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Hyprland IPC client returns the currently focused monitor struct with name, virtual origin (x, y), logical width/height, and scale.
+      - Errors are wrapped with context when HYPRLAND_INSTANCE_SIGNATURE is missing or the socket is unreachable.
+      - Unit tests mock a Hyprland IPC responder and exercise success and failure paths, including a focused monitor with a non-zero virtual-layout origin.
+      - Optional manual verification path against a real Hyprland session is documented in the task notes, with automated fake-socket tests as the required gate.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add Hyprland IPC client for focused-monitor queries
+
+  - id: wayland-client-base
+    title: Establish Wayland client base with registry and output enumeration
+    details: |
+      Add a direct Wayland client (no GTK) that connects to the compositor via
+      $WAYLAND_DISPLAY and binds the global interfaces required for v1:
+      wl_compositor, wl_shm, wl_seat (keyboard + pointer), wl_output (with name
+      and scale), and announces support for the wlr-layer-shell and
+      wlr-virtual-pointer-unstable-v1 protocols.
+
+      At the start of this task, choose and document a reproducible Go Wayland
+      binding/code-generation strategy. Pin any Go modules and check in, vendor,
+      or generate from committed protocol XMLs for wlr-layer-shell and
+      wlr-virtual-pointer. The task is not complete if protocol availability
+      depends on an unrecorded system file, hand-edited generated code, or an
+      ad hoc local generator state.
+
+      Provide a clean API for downstream tasks to obtain the compositor, shm,
+      and seat, and to enumerate outputs by Hyprland-known monitor name (via
+      the wl_output "name" event in wl_output v4 or the equivalent zxdg-output
+      info). Match by name to the result from hyprland-focused-monitor.
+
+      Software-rendered shm buffers only — no EGL, GTK, or GPU-rendered
+      overlays per PRD platform stack.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Wayland client connects to $WAYLAND_DISPLAY and binds wl_compositor, wl_shm, wl_seat, wl_output, plus the layer-shell and virtual-pointer protocol globals.
+      - Required protocol XMLs/generated bindings are reproducible from files or pinned modules recorded in the repo.
+      - Output enumeration exposes name, logical position, logical size, and scale and matches the Hyprland-reported focused monitor by name.
+      - Connection failure modes (missing socket, missing required globals) emit clear errors.
+      - Unit tests cover the registry-binding logic against the fake Wayland backend or recorded protocol fixtures and run headlessly.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add direct Wayland client base with registry and output enumeration
+
+  - id: font-atlas-render
+    title: Add font rasterization for grid labels and HUD
+    details: |
+      Render letter labels for grid edges and the HUD without GTK. The PRD
+      explicitly allows either FreeType bindings or a pre-baked atlas — choose
+      one and document the choice and reasons in the task notes (this decision
+      is the kind of plan-adjustment that should survive replanning).
+
+      Whichever path is used, the renderer must:
+      - Provide A-Z labels at the configured label_font_size and a
+        HUD-suitable size.
+      - Support semi-transparent compositing onto an ARGB shm buffer.
+      - Be deterministic so snapshot tests can compare output.
+      - Pre-rasterize once at daemon start (or build time for a pre-baked atlas)
+        so the show path stays fast.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Renderer returns ARGB glyph bitmaps for A-Z plus any digits/punctuation needed for the HUD at the configured label_font_size.
+      - Rasterization is deterministic and snapshot tests verify a representative subset of glyphs.
+      - A composite-onto-buffer helper supports semi-transparent blending.
+      - Glyphs are cached so repeated show invocations do not re-rasterize them.
+      - Choice between FreeType bindings and pre-baked atlas is documented in the task notes with the reasoning behind it.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add font rasterization for grid labels and HUD
+
+  - id: wlr-layer-shell-overlay
+    title: Render exclusive layer-shell overlay on focused monitor
+    details: |
+      Implement a wlr-layer-shell client that creates a top-layer surface
+      anchored to the focused monitor's logical area. Set
+      keyboard_interactivity=exclusive to grab the keyboard. Render a
+      software-composited shm buffer.
+
+      Surface lifecycle: created on the "show" IPC command, destroyed on
+      hide/cancel/Esc. Buffers are re-created on output scale change and on
+      configure events. The cursor must remain visible while the overlay is
+      active (PRD visual design).
+
+      For this task the surface should render a placeholder background only;
+      the real 26x26 grid drawing comes in main-grid-render. Wire the
+      "show"/"hide" IPC commands so they create and destroy the overlay
+      through this layer.
+    workflow: implement
+    status: todo
+    deps:
+      - wayland-client-base
+      - hyprland-focused-monitor
+      - ipc-socket-and-toggle
+    context_files:
+      - PRD.md
+    acceptance:
+      - The "show" IPC command creates a layer-shell surface anchored to the focused monitor's logical region with keyboard_interactivity=exclusive.
+      - The "hide" IPC command destroys the surface cleanly without leaking buffers.
+      - Surface re-renders correctly on monitor scale change and configure events.
+      - Cursor remains visible while the overlay is active.
+      - Automated fake-backend tests assert surface create/destroy, configure handling, focused-output targeting, and keyboard_interactivity=exclusive.
+      - Optional manual verification steps for confirming the overlay attaches to the focused monitor are documented in the task notes.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add wlr-layer-shell overlay surface with keyboard grab
+
+  - id: wayland-keyboard-input
+    title: Translate exclusive Wayland keyboard input into tool commands
+    details: |
+      Implement the keyboard input layer used while the overlay is active.
+      Receive wl_keyboard events from the exclusive layer-shell surface,
+      maintain xkb state from the compositor-provided keymap, and translate key
+      press events into internal command/key tokens for the FSM and configured
+      keybindings.
+
+      Requirements:
+      - Letter input maps to A-Z grid coordinates regardless of lowercase or
+        shifted keysyms.
+      - Command keys are matched by the configured xkbcommon keysym names
+        (Return, space, Tab, Escape, BackSpace, etc.).
+      - Key releases do not trigger actions.
+      - Compositor-generated key repeat does not accidentally create clicks or
+        double-clicks; tests should make the repeat policy explicit.
+      - Keyboard leave/destroy resets any pressed-key bookkeeping cleanly.
+
+      Use the fake keyboard source from test-harness-and-observability for
+      deterministic tests; a real compositor is not required to verify this
+      task.
+    workflow: implement
+    status: todo
+    deps:
+      - wayland-client-base
+      - wlr-layer-shell-overlay
+      - config-toml-loader
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - wl_keyboard key press events are translated into internal letter and command tokens.
+      - Configured keybind names are matched using xkbcommon-compatible keysym names and invalid names remain rejected by config validation.
+      - Lowercase and shifted alphabetic input both resolve to A-Z coordinate letters.
+      - Key release events do not trigger actions, and key repeat behavior is covered by tests.
+      - Unit tests use the fake keyboard source/keymap path and run without a real Wayland session.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Translate exclusive Wayland keyboard input into tool commands
+
+  - id: wlr-virtual-pointer
+    title: Synthesize pointer motion and clicks via wlr-virtual-pointer-unstable-v1
+    details: |
+      Implement bindings to the wlr-virtual-pointer-unstable-v1 protocol. Prefer
+      "create_virtual_pointer_with_output" mapped to the focused monitor's
+      wl_output when the compositor advertises it. Provide a fallback that
+      explicitly accounts for the focused monitor's virtual-layout origin so
+      absolute pointer motion lands on the right monitor in multi-monitor
+      setups (an explicit PRD acceptance gate).
+
+      Expose an internal API: MoveAbsolute(x, y logical, output), LeftClick(),
+      RightClick(), DoubleClick(). Internally emit motion + frame, and
+      button-down/button-up + frame events as required by the protocol.
+
+      No ydotool or uinput dependency — direct Wayland protocol only.
+    workflow: implement
+    status: todo
+    deps:
+      - wayland-client-base
+      - hyprland-focused-monitor
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Virtual-pointer client binds to wlr-virtual-pointer-unstable-v1 and uses create_virtual_pointer_with_output when available.
+      - Fallback path explicitly applies the focused monitor's virtual-layout origin so absolute motion is correct on offset monitors.
+      - MoveAbsolute, LeftClick, RightClick, and DoubleClick produce protocol-correct event sequences (verified via unit tests against a stub compositor or recorded fixtures).
+      - Virtual-pointer recorder tests assert exact motion/frame/button event ordering and coordinates.
+      - Unit tests cover the with-output path and the fallback offset path with a non-zero virtual origin.
+      - No ydotool or uinput dependency is introduced.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add wlr-virtual-pointer synthesis with focused-output mapping
+
+  - id: main-grid-render
+    title: Render 26x26 main grid with edge labels and HUD
+    details: |
+      On the layer-shell overlay surface, draw the 26x26 main grid per PRD
+      section "1. Main grid":
+
+      - Cell bounds cover the focused monitor's full logical area; uneven
+        divisions are distributed deterministically so every logical pixel
+        belongs to exactly one cell.
+      - Grid lines are full and semi-transparent, using
+        appearance.grid_opacity and appearance.grid_line_width.
+      - Letter labels A-Z on all four edges: top and bottom edges show column
+        letters (horizontal axis); left and right edges show row letters
+        (vertical axis). Interior cells are unlabeled.
+      - HUD renders in a small fixed location (e.g. bottom-center or near the
+        cursor) and shows in-progress input. The renderer accepts a HUD string
+        from the caller; the FSM in coordinate-entry-fsm wires it to live input.
+      - Grid geometry is calculated in monitor-local logical pixels. Wayland
+        buffer scaling handles physical pixel density.
+    workflow: implement
+    status: todo
+    deps:
+      - wlr-layer-shell-overlay
+      - font-atlas-render
+      - config-toml-loader
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Grid renders 26x26 cells whose union covers exactly the focused monitor's logical region (no missing or duplicated pixels).
+      - Edge labels A-Z appear on all four edges; interior cells have no labels.
+      - Grid uses configured opacity, line width, and label font size from config.toml.
+      - HUD displays a placeholder string supplied by the renderer (live wiring lands in the FSM task).
+      - Snapshot tests verify cell layout for at least two distinct logical sizes (square and non-square).
+      - Snapshot tests store stable hashes or golden buffers so rendering regressions are visible in unattended runs.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Render 26x26 main grid with edge labels and HUD area
+
+  - id: coordinate-entry-fsm
+    title: Add main-grid coordinate-entry FSM with column dim, HUD, and backspace
+    details: |
+      Implement the keyboard-driven coordinate-entry flow per PRD section
+      "2. Coordinate entry":
+
+      - User types two letters: first = horizontal (column), second = vertical
+        (row). Example "MK" means column M, row K.
+      - After the first letter, the grid dims/hides all non-matching columns;
+        only the selected column remains highlighted.
+      - HUD shows the typed input (e.g. "M_") and updates after every keystroke
+        and after Backspace.
+      - Backspace removes the last typed character within the current
+        coordinate input.
+      - Invalid keys (non-letter, non-command) are ignored.
+      - On the second letter, the FSM emits a "main coordinate selected" event
+        with the chosen cell coordinates so the sub-grid step can react.
+
+      Hook into the keyboard input from the layer-shell surface and the IPC
+      layer so "show"-toggle and "hide" both reset state cleanly.
+    workflow: implement
+    status: todo
+    deps:
+      - main-grid-render
+      - ipc-socket-and-toggle
+      - wayland-keyboard-input
+    context_files:
+      - PRD.md
+    acceptance:
+      - Typing the first letter highlights only its column and dims the rest.
+      - HUD updates after each typed letter and after Backspace.
+      - Backspace removes the last typed character; invalid keys are ignored.
+      - On the second letter, the FSM emits a main-coordinate-selected event with the resolved cell coordinates.
+      - Hide and show-toggle reset FSM state.
+      - Unit tests cover transitions for first letter, second letter, backspace, invalid keys, and reset.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add coordinate-entry FSM with column dim, HUD updates, and backspace
+
+  - id: subgrid-render-and-input
+    title: Render and handle input for the sub-grid refinement step
+    details: |
+      Implement PRD section "3. Cursor move + sub-grid":
+
+      - After the second main-grid letter, move the cursor to the center of
+        the selected cell via the virtual-pointer module.
+      - Hide the main grid; render a small floating sub-grid at the cursor
+        location.
+      - The sub-grid represents the selected main-grid cell, drawn around the
+        cursor and clipped or shifted as needed to remain visible on the
+        focused monitor.
+      - Target ~5 logical pixels per sub-cell (configurable via
+        grid.subgrid_pixel_size), capped at 26 sub-cells per axis. Sub-cell
+        count per axis is exactly
+        "min(26, max(1, round(main_cell_axis_size / subgrid_pixel_size)))".
+        Actual sub-cell size may be larger than the target on high-resolution
+        displays.
+      - Letters are labeled along the top (horizontal) and left (vertical)
+        edges from A through the last available sub-cell. Letter keys outside
+        the available range are ignored.
+      - Input modes: two letters for full XY refinement, OR just the
+        horizontal letter + Tab to commit refinement on X only (Y stays at
+        the main cell's vertical center).
+    workflow: implement
+    status: todo
+    deps:
+      - coordinate-entry-fsm
+      - wlr-virtual-pointer
+      - font-atlas-render
+      - config-toml-loader
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - On second-letter commit of the main grid, the cursor is moved to the center of the selected main-grid cell via the virtual pointer.
+      - The sub-grid is rendered at the cursor location, hides the main grid, and is clipped or shifted to remain on the focused monitor.
+      - Sub-cell count per axis equals min(26, max(1, round(main_cell_axis_size / subgrid_pixel_size))).
+      - Sub-grid edge labels appear only on top (horizontal) and left (vertical) up to the available sub-cell range; out-of-range letters are ignored.
+      - Two-letter sub-input refines XY; horizontal letter + Tab commits X-only refinement (Y stays at the main cell's vertical center).
+      - Unit tests cover the sub-cell count formula, edge clipping math, and FSM transitions for the sub-grid step.
+      - Tests use the pointer recorder and renderer snapshots to assert cursor move target and sub-grid placement without a live compositor.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add sub-grid refinement rendering and input handling
+
+  - id: click-commit-actions
+    title: Wire click commit, double-click timing, and stay-active behavior
+    details: |
+      Implement PRD sections "4. Commit / click" and "5. Stay-active behavior".
+      All keybindings honor values loaded from config.toml.
+
+      - Enter -> left click. Space -> right click. Tab -> commit partial
+        sub-grid input. Esc -> commit cursor position without clicking, then
+        exit. A click also auto-commits any pending partial sub-grid input.
+      - Double click: two Enter presses within
+        behavior.double_click_timeout_ms emit a double click. The daemon waits
+        up to that timeout after the first Enter; if a second Enter arrives in
+        time, emit a double click; otherwise emit a single left click and then
+        apply stay-active behavior.
+      - Double click must NOT reopen the main grid between the two clicks
+        (explicit PRD acceptance gate).
+      - Stay-active default true: after a click, the main grid re-appears for
+        the next coordinate. When stay_active=false, exit after a single click.
+      - Esc always exits regardless of stay-active.
+
+      This task introduces stateful click-and-timer behavior across config,
+      virtual-pointer, and overlay layers. Add focused unit tests for keybind
+      parsing, double-click timing, stay-active branches, and Esc override
+      inline with this implementation rather than deferring them — the timing
+      logic and the no-reopen-between-double-click invariant are the highest
+      regression risk in the project.
+    workflow: implement
+    status: todo
+    deps:
+      - subgrid-render-and-input
+      - wlr-virtual-pointer
+      - config-toml-loader
+      - wayland-keyboard-input
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Enter emits a left click at the committed cursor position; Space emits a right click.
+      - Two Enter presses within double_click_timeout_ms emit exactly one double click without re-rendering the main grid between the clicks.
+      - A delayed single Enter emits one left click and then applies stay-active behavior.
+      - Tab commits partial sub-grid X-only refinement and proceeds to click on the next click action.
+      - Esc commits cursor position without clicking and exits regardless of stay_active.
+      - stay_active=true returns to the main grid after a click; stay_active=false exits after one click.
+      - Unit tests cover keybind parsing, double-click timing, stay-active branches, and Esc override.
+      - Tests use the fake clock and pointer/event recorder; no test sleeps for double_click_timeout_ms in real time.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Wire click commit, double-click timing, and stay-active behavior
+
+  - id: multi-output-and-scaling
+    title: Verify focused-monitor targeting on offset and scaled outputs
+    details: |
+      This task hardens the project against the multi-monitor and scaling
+      acceptance gates the PRD calls out for v1, even though multi-monitor
+      selection / spanning is out of scope.
+
+      - Pointer motion targets the focused monitor's output coordinate space
+        when create_virtual_pointer_with_output is available.
+      - Fallback code explicitly accounts for the focused monitor's
+        virtual-layout origin so absolute pointer motion lands on the focused
+        monitor in multi-monitor setups with non-zero origins.
+      - Grid renders correctly on a scaled monitor (grid is computed in
+        logical pixels; Wayland buffer scaling handles physical density).
+      - Multi-monitor selection / spanning remains out of scope and is
+        documented as such.
+
+      Add deterministic unit tests for the coordinate transforms
+      (logical-to-buffer, logical-to-virtual-layout) covering scaled and
+      offset monitors. Use the fake monitor/output fixtures and renderer
+      snapshots as the required gate. Document optional manual verification on
+      a real Hyprland session with a non-zero-origin focused monitor and a
+      scaled monitor when such an environment is available, but absence of that
+      environment must not block the task.
+
+      A standalone task is justified here because this work cuts across
+      previously-shipped pointer and overlay code, depends on rare
+      multi-monitor environments to validate, and protects two distinct PRD
+      acceptance gates (non-zero origin and scaled monitor) — broader risk
+      surface than any single earlier impl task.
+    workflow: implement
+    status: todo
+    deps:
+      - wlr-virtual-pointer
+      - wlr-layer-shell-overlay
+      - hyprland-focused-monitor
+      - main-grid-render
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - Coordinate-transform unit tests cover scale != 1.0 and non-zero virtual-layout origin and pass.
+      - When create_virtual_pointer_with_output is available, pointer motion is mapped to the focused output without manual offset.
+      - Fallback path adds the focused monitor's virtual origin offset and is exercised in tests.
+      - Grid lines and edge labels remain correctly aligned on a scaled monitor using snapshot tests.
+      - Optional manual verification steps for a multi-monitor + scaled setup are documented in the task notes; automated tests remain the required gate.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Verify focused-monitor targeting on offset and scaled outputs
+
+  - id: headless-prd-acceptance-suite
+    title: Add headless PRD acceptance suite with trace assertions
+    details: |
+      Build a deterministic acceptance suite that exercises the PRD acceptance
+      checks without requiring a human-operated Hyprland session. The suite
+      should use the fake monitor, fake overlay backend, fake keyboard source,
+      fake clock, renderer snapshots, and virtual-pointer recorder introduced
+      earlier.
+
+      Cover these flows end-to-end through the daemon/application layer, not
+      only isolated helper functions:
+      - show displays a 26x26 grid on the focused monitor and grabs keyboard
+      - two coordinate letters plus Enter completes a left click in the expected
+        3-5 keystrokes
+      - Enter Enter within double_click_timeout_ms emits exactly two left-button
+        clicks at the same committed cursor position and does not reopen the
+        main grid between clicks
+      - focused-monitor targeting works with a non-zero virtual-layout origin
+      - grid and pointer targeting remain correct with scale != 1.0
+      - Escape exits without clicking and overrides stay_active
+
+      The tests must assert trace/event sequences, not just "no error". Include
+      coordinates, monitor/output names, click counts, overlay show/hide counts,
+      and relevant renderer snapshot hashes in failure output so an unattended
+      agent can diagnose regressions.
+    workflow: implement
+    status: todo
+    deps:
+      - click-commit-actions
+      - multi-output-and-scaling
+      - test-harness-and-observability
+    context_files:
+      - PRD.md
+    acceptance:
+      - A named headless acceptance test suite covers every PRD acceptance check listed in PRD.md.
+      - Acceptance tests assert structured trace/event output for overlay lifecycle, keyboard grab, pointer moves, button events, and stay-active transitions.
+      - Double-click acceptance asserts no main-grid reopen event occurs between the two click events.
+      - Scaled and non-zero-origin monitor cases use deterministic fake fixtures and require no real compositor.
+      - Failure output includes enough structured data for an AI agent to identify the failing coordinate, monitor, or event-order invariant.
+      - Running go test ./... runs the headless acceptance suite by default.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+    commit_message: Add headless PRD acceptance suite with trace assertions
+
+  - id: systemd-user-unit
+    title: Add mousekeys.service systemd user unit and install instructions
+    details: |
+      Provide a packaged "mousekeys.service" systemd user unit per PRD process
+      model:
+
+      - Restart=on-failure.
+      - The service runs only inside a Hyprland Wayland session and depends on
+        XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE being
+        available to the service. Recommend UWSM or another setup that imports
+        the Hyprland session environment into the systemd user manager. Add an
+        ExecStartPre or in-binary guard that bails out with a clear journal
+        message if any required env var is missing.
+      - Logs go via "journalctl --user -u mousekeys" (default behavior — the
+        daemon writes to stderr).
+      - Document install steps: where to copy the unit file, how to enable it
+        with "systemctl --user enable --now mousekeys", and how to disable it.
+
+      The Hyprland-autostart alternative ("exec-once = mousekeys daemon" or
+      the Lua equivalent) is documented in docs-hyprland-and-install rather
+      than here.
+    workflow: implement
+    status: todo
+    deps:
+      - bootstrap-cli-skeleton
+    context_files:
+      - PRD.md
+    acceptance:
+      - Repository contains a "mousekeys.service" user unit file with Restart=on-failure and a required-env guard.
+      - Unit file references the installed "mousekeys daemon" command and is documented as a user unit (not system).
+      - Install/uninstall instructions exist (README section or docs file) for "systemctl --user enable --now mousekeys" and the disable equivalent.
+      - The unit file is lint-checked with "systemd-analyze --user verify <path>" and the result is captured in the task notes (or the absence of systemd-analyze is documented).
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go test ./...
+      - go vet ./...
+      - if command -v systemd-analyze >/dev/null; then systemd-analyze --user verify mousekeys.service; else echo "systemd-analyze not found; document this in task notes"; fi
+    commit_message: Add mousekeys.service systemd user unit and install instructions
+
+  - id: docs-hyprland-and-install
+    title: Document Hyprland keybind, autostart, install, and v1 non-goals
+    details: |
+      Author user-facing documentation that captures the PRD's external
+      integration contract:
+
+      - Hyprland 0.55+ Lua keybind:
+        hl.bind("SUPER + period", hl.dsp.exec_cmd("mousekeys show"))
+      - Legacy hyprlang equivalent:
+        bind = SUPER, period, exec, mousekeys show
+      - Optional autostart for users not using systemd:
+        - Hyprland 0.55+ Lua:
+          hl.on("hyprland.start", function() hl.exec_cmd("mousekeys daemon") end)
+        - Legacy hyprlang: exec-once = mousekeys daemon
+      - systemd user unit install/enable instructions referencing the unit
+        added in systemd-user-unit (use UWSM or equivalent so the Hyprland
+        session env is imported into the systemd user manager).
+      - Note that the global trigger hotkey is NOT in the mousekeys config —
+        it is set in the user's Hyprland config.
+      - Reference the default config.toml contents and key locations from the
+        PRD.
+      - State the v1 non-goals (no click-and-drag, no scroll, no X11, no
+        multi-monitor selection, no GUI config tool, no live config reload,
+        no recursive sub-sub-grid).
+    workflow: implement
+    status: todo
+    deps:
+      - ipc-socket-and-toggle
+      - config-toml-loader
+      - systemd-user-unit
+    context_files:
+      - PRD.md
+    acceptance:
+      - README covers Hyprland 0.55+ Lua keybind and legacy hyprlang keybind.
+      - Docs include the optional autostart blocks for both Lua and legacy hyprlang.
+      - systemd user unit install/enable steps are documented and consistent with the unit shipped in the repo.
+      - Default config.toml contents from the PRD are referenced in the docs.
+      - v1 non-goals are documented.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - test -f README.md
+      - grep -F 'hl.bind("SUPER + period", hl.dsp.exec_cmd("mousekeys show"))' README.md
+      - grep -F 'bind = SUPER, period, exec, mousekeys show' README.md
+      - grep -F 'exec-once = mousekeys daemon' README.md
+    commit_message: Document Hyprland integration, autostart, install, and v1 non-goals
+
+  - id: basic-flow-checkpoint
+    title: "Checkpoint: basic show -> select -> click flow is green"
+    details: |
+      Run the project test suite and confirm the basic end-to-end flow works
+      through the headless acceptance harness before expanding into the final
+      acceptance gates:
+
+      - "go build ./..." succeeds.
+      - "go vet ./..." reports no issues.
+      - "go test ./..." passes.
+      - Headless smoke test: with the daemon/application running against fakes,
+        "mousekeys show" opens the 26x26 grid on the focused monitor;
+        two-letter input + Enter produces a left click within roughly 3-5
+        keystrokes.
+      - Optional manual smoke test may be recorded if a Hyprland session exists,
+        but it is not required for unattended completion.
+
+      Fix any regressions found before continuing. Capture any plan
+      adjustments in the task notes.
+    workflow: checkpoint
+    status: todo
+    deps:
+      - headless-prd-acceptance-suite
+    context_files:
+      - PRD.md
+    acceptance:
+      - Full Go test suite is green.
+      - Vetting via "go vet ./..." reports no issues.
+      - Build via "go build ./..." produces a runnable binary.
+      - Headless smoke flow (show -> two-letter -> Enter -> click) is exercised and the structured trace result is captured in the task notes.
+      - Any regressions found are fixed before finalize.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go vet ./...
+      - go test ./...
+    commit_message: "Checkpoint: basic show -> select -> click flow is green"
+
+  - id: acceptance-checkpoint
+    title: "Checkpoint: PRD acceptance suite verified"
+    details: |
+      Execute the PRD "Acceptance Checks" list end-to-end and capture results
+      in the task notes:
+
+      - "mousekeys show" displays a 26x26 grid on the focused monitor and
+        captures keyboard input.
+      - A normal left click completes in the expected 3-5 keystrokes from
+        trigger to click.
+      - Double-click emits two left-button clicks at the same committed cursor
+        position WITHOUT reopening the main grid between clicks.
+      - Focused-monitor behavior works when the focused monitor has a non-zero
+        virtual-layout origin.
+      - Grid and pointer targeting remain correct on a scaled monitor.
+      - Esc exits without clicking and overrides stay_active.
+
+      Each item must be verified by an automated headless acceptance test.
+      If a real Hyprland session is available, record optional manual run steps
+      and observed results in the task notes, but do not depend on human
+      observation to pass the checkpoint. Fix any regressions before finalize.
+    workflow: checkpoint
+    status: todo
+    deps:
+      - basic-flow-checkpoint
+      - headless-prd-acceptance-suite
+      - multi-output-and-scaling
+      - docs-hyprland-and-install
+      - systemd-user-unit
+    context_files:
+      - PRD.md
+    acceptance:
+      - 26x26 grid display and keyboard capture on the focused monitor are verified.
+      - 3-5 keystroke left-click target is verified end-to-end.
+      - Double click emits two left button events at the committed cursor without reopening the main grid between them.
+      - Focused-monitor behavior on a non-zero virtual-layout origin is verified.
+      - Grid and pointer targeting on a scaled monitor are verified.
+      - Esc exits without clicking and overrides stay_active.
+      - Tests pass via "go test ./..." and the binary builds cleanly.
+      - Leave short notes in the task result about what was learned in this phase, including discoveries or plan adjustments that matter if the project is re-planned and rerun in a fresh environment.
+    verify_commands:
+      - go build ./...
+      - go vet ./...
+      - go test ./...
+    commit_message: "Checkpoint: PRD acceptance suite verified"
