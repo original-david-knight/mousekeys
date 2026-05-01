@@ -122,7 +122,7 @@ tasks:
 
         The global trigger hotkey (Super+period) is intentionally NOT in this
         config — it lives in the user's Hyprland config.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

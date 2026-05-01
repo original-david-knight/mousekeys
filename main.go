@@ -78,6 +78,14 @@ func runDaemonCommand(args []string, log *logger) error {
 		return fmt.Errorf("daemon requires Hyprland Wayland session environment; missing %s", strings.Join(missing, ", "))
 	}
 
+	configPath, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	if _, err := LoadConfigFile(configPath); err != nil {
+		return err
+	}
+
 	trace, traceCloser, err := newTraceRecorderFromEnv(systemClock{})
 	if err != nil {
 		return err
@@ -88,6 +96,7 @@ func runDaemonCommand(args []string, log *logger) error {
 	defer stop()
 
 	log.Info("daemon starting", map[string]string{
+		"config_path":                 configPath,
 		"xdg_runtime_dir":             os.Getenv("XDG_RUNTIME_DIR"),
 		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
 		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),

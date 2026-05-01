@@ -5,3 +5,6 @@ tasks:
     - id: test-harness-and-observability
       status: done
       notes: Added thin internal boundaries, deterministic fakes, ARGB snapshot/hash helpers, fake clock timers, and optional JSONL tracing. Current daemon remains a stub; future protocol tasks can test through injected interfaces without live Hyprland/Wayland, while go build/test/vet pass.
+    - id: config-toml-loader
+      status: done
+      notes: Added XDG-aware config.toml loading with first-start default creation, TOML missing-field defaulting, value validation, and xkbcommon-style key sequence parsing. Daemon now loads config once at startup; tests cover XDG temp dirs, defaults, user overrides, invalid values, and CGO-disabled fallback behavior.
