@@ -61,6 +61,7 @@ type OverlaySurface interface {
 	GrabKeyboard(context.Context) error
 	Render(context.Context, ARGBBuffer) error
 	Destroy(context.Context) error
+	Closed() <-chan struct{}
 }
 
 type SurfaceConfig struct {

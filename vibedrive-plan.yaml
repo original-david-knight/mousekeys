@@ -311,7 +311,7 @@ tasks:
         the real 26x26 grid drawing comes in main-grid-render. Wire the
         "show"/"hide" IPC commands so they create and destroy the overlay
         through this layer.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base

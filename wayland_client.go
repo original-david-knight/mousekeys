@@ -24,6 +24,8 @@ const waylandDispatchPollInterval = 100 * time.Millisecond
 
 type WaylandClient struct {
 	mu                    sync.RWMutex
+	protocolMu            sync.Mutex
+	dispatchOnce          sync.Once
 	closeOnce             sync.Once
 	closeErr              error
 	display               *wlclient.Display
@@ -38,6 +40,7 @@ type WaylandClient struct {
 	xdgOutputManager      *xdgoutput.OutputManager
 	outputs               map[uint32]*waylandOutputState
 	outputHandles         map[uint32]*wlclient.Output
+	outputListeners       map[string]map[waylandOutputChangeListener]struct{}
 	protocolErr           error
 }
 
@@ -82,9 +85,10 @@ func OpenWaylandClient(ctx context.Context, socketPath string) (*WaylandClient, 
 	}
 
 	client := &WaylandClient{
-		display:       display,
-		outputs:       map[uint32]*waylandOutputState{},
-		outputHandles: map[uint32]*wlclient.Output{},
+		display:         display,
+		outputs:         map[uint32]*waylandOutputState{},
+		outputHandles:   map[uint32]*wlclient.Output{},
+		outputListeners: map[string]map[waylandOutputChangeListener]struct{}{},
 	}
 	display.SetErrorHandler(func(event wlclient.DisplayErrorEvent) {
 		objectID := uint32(0)
@@ -308,23 +312,31 @@ func (c *WaylandClient) bindOutputs(outputs []waylandGlobalBinding) error {
 		output := wlclient.NewOutput(ctx)
 		output.SetGeometryHandler(func(event wlclient.OutputGeometryEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyWLGeometry(int(event.X), int(event.Y), int(event.Transform))
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		output.SetModeHandler(func(event wlclient.OutputModeEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyWLMode(event.Flags, int(event.Width), int(event.Height))
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		output.SetScaleHandler(func(event wlclient.OutputScaleEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyWLScale(int(event.Factor))
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		output.SetNameHandler(func(event wlclient.OutputNameEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyWLName(event.Name)
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		if err := c.registry.Bind(binding.Global.Name, waylandInterfaceOutput, binding.Version, output); err != nil {
 			return fmt.Errorf("bind %s global %d: %w", waylandInterfaceOutput, binding.Global.Name, err)
@@ -360,18 +372,24 @@ func (c *WaylandClient) bindXDGOutputs(binding waylandGlobalBinding) error {
 		}
 		xdgOutput.SetLogicalPositionHandler(func(event xdgoutput.OutputLogicalPositionEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyXDGLogicalPosition(int(event.X), int(event.Y))
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		xdgOutput.SetLogicalSizeHandler(func(event xdgoutput.OutputLogicalSizeEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyXDGLogicalSize(int(event.Width), int(event.Height))
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		xdgOutput.SetNameHandler(func(event xdgoutput.OutputNameEvent) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			state.applyXDGName(event.Name)
+			listeners := c.outputListenerSnapshotLocked(state)
+			c.mu.Unlock()
+			notifyWaylandOutputListeners(listeners)
 		})
 		c.mu.RLock()
 	}

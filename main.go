@@ -156,7 +156,13 @@ func runClientCommand(command string, args []string, log *logger) error {
 }
 
 func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder, fontAtlas *FontAtlas) error {
-	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedStubDaemonController(trace, fontAtlas))
+	wayland, err := OpenWaylandClientFromEnv(ctx)
+	if err != nil {
+		return err
+	}
+	defer wayland.Close()
+
+	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedWaylandDaemonController(trace, fontAtlas, wayland))
 }
 
 func runDaemonLoop(ctx context.Context, log *logger, trace TraceRecorder, controller *DaemonController) error {

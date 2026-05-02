@@ -211,6 +211,11 @@ func (r *fakeWaylandProtocolResponder) handle(conn net.Conn) {
 	outputGlobalByObject := map[uint32]uint32{}
 	var xdgOutputManagerID uint32
 	xdgOutputByOutputObject := map[uint32]uint32{}
+	objectKindByID := map[uint32]string{}
+	layerSurfaceBySurface := map[uint32]uint32{}
+	layerSurfaceSize := map[uint32][2]uint32{}
+	layerSurfaceConfigured := map[uint32]bool{}
+	attachedBufferBySurface := map[uint32]uint32{}
 
 	for {
 		request, err := readFakeWaylandRequest(conn)
@@ -240,10 +245,82 @@ func (r *fakeWaylandProtocolResponder) handle(conn net.Conn) {
 			if bind.iface == waylandInterfaceXDGOutputManager {
 				xdgOutputManagerID = bind.objectID
 			}
+			objectKindByID[bind.objectID] = bind.iface
 		case xdgOutputManagerID != 0 && request.sender == xdgOutputManagerID && request.opcode == 1:
 			xdgOutputID := fakeWaylandUint32(request.payload[0:4])
 			outputID := fakeWaylandUint32(request.payload[4:8])
 			xdgOutputByOutputObject[outputID] = xdgOutputID
+			objectKindByID[xdgOutputID] = "zxdg_output_v1"
+		case objectKindByID[request.sender] == waylandInterfaceCompositor && request.opcode == 0:
+			surfaceID := fakeWaylandUint32(request.payload[0:4])
+			objectKindByID[surfaceID] = "wl_surface"
+			r.recordRequest("wl_compositor.create_surface")
+		case objectKindByID[request.sender] == waylandInterfaceCompositor && request.opcode == 1:
+			regionID := fakeWaylandUint32(request.payload[0:4])
+			objectKindByID[regionID] = "wl_region"
+			r.recordRequest("wl_compositor.create_region")
+		case objectKindByID[request.sender] == waylandInterfaceLayerShell && request.opcode == 0:
+			layerSurfaceID := fakeWaylandUint32(request.payload[0:4])
+			surfaceID := fakeWaylandUint32(request.payload[4:8])
+			objectKindByID[layerSurfaceID] = "zwlr_layer_surface_v1"
+			layerSurfaceBySurface[surfaceID] = layerSurfaceID
+			r.recordRequest("zwlr_layer_shell_v1.get_layer_surface")
+		case objectKindByID[request.sender] == "zwlr_layer_surface_v1" && request.opcode == 0:
+			width := fakeWaylandUint32(request.payload[0:4])
+			height := fakeWaylandUint32(request.payload[4:8])
+			layerSurfaceSize[request.sender] = [2]uint32{width, height}
+			r.recordRequest(fmt.Sprintf("zwlr_layer_surface_v1.set_size:%dx%d", width, height))
+		case objectKindByID[request.sender] == "zwlr_layer_surface_v1" && request.opcode == 4:
+			interactivity := fakeWaylandUint32(request.payload[0:4])
+			r.recordRequest(fmt.Sprintf("zwlr_layer_surface_v1.set_keyboard_interactivity:%d", interactivity))
+		case objectKindByID[request.sender] == "zwlr_layer_surface_v1" && request.opcode == 6:
+			serial := fakeWaylandUint32(request.payload[0:4])
+			r.recordRequest(fmt.Sprintf("zwlr_layer_surface_v1.ack_configure:%d", serial))
+		case objectKindByID[request.sender] == "zwlr_layer_surface_v1" && request.opcode == 7:
+			delete(objectKindByID, request.sender)
+			r.recordRequest("zwlr_layer_surface_v1.destroy")
+		case objectKindByID[request.sender] == waylandInterfaceShm && request.opcode == 0:
+			poolID := fakeWaylandUint32(request.payload[0:4])
+			objectKindByID[poolID] = "wl_shm_pool"
+			r.recordRequest("wl_shm.create_pool")
+		case objectKindByID[request.sender] == "wl_shm_pool" && request.opcode == 0:
+			bufferID := fakeWaylandUint32(request.payload[0:4])
+			objectKindByID[bufferID] = "wl_buffer"
+			r.recordRequest("wl_shm_pool.create_buffer")
+		case objectKindByID[request.sender] == "wl_shm_pool" && request.opcode == 1:
+			delete(objectKindByID, request.sender)
+			r.recordRequest("wl_shm_pool.destroy")
+		case objectKindByID[request.sender] == "wl_buffer" && request.opcode == 0:
+			delete(objectKindByID, request.sender)
+			r.recordRequest("wl_buffer.destroy")
+		case objectKindByID[request.sender] == "wl_region" && request.opcode == 0:
+			delete(objectKindByID, request.sender)
+			r.recordRequest("wl_region.destroy")
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 1:
+			attachedBufferBySurface[request.sender] = fakeWaylandUint32(request.payload[0:4])
+			r.recordRequest("wl_surface.attach")
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 5:
+			r.recordRequest("wl_surface.set_input_region")
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 6:
+			r.recordRequest("wl_surface.commit")
+			layerSurfaceID := layerSurfaceBySurface[request.sender]
+			attachedBufferID := attachedBufferBySurface[request.sender]
+			if layerSurfaceID != 0 && attachedBufferID == 0 && !layerSurfaceConfigured[layerSurfaceID] {
+				size := layerSurfaceSize[layerSurfaceID]
+				writeFakeWaylandMessage(conn, layerSurfaceID, 0, append(fakeWaylandU32(101), append(fakeWaylandU32(size[0]), fakeWaylandU32(size[1])...)...))
+				layerSurfaceConfigured[layerSurfaceID] = true
+			}
+			if attachedBufferID != 0 {
+				writeFakeWaylandMessage(conn, attachedBufferID, 0, nil)
+			}
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 8:
+			scale := fakeWaylandUint32(request.payload[0:4])
+			r.recordRequest(fmt.Sprintf("wl_surface.set_buffer_scale:%d", scale))
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 9:
+			r.recordRequest("wl_surface.damage_buffer")
+		case objectKindByID[request.sender] == "wl_surface" && request.opcode == 0:
+			delete(objectKindByID, request.sender)
+			r.recordRequest("wl_surface.destroy")
 		}
 	}
 }

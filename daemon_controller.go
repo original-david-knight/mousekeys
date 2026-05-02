@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 type DaemonState string
@@ -23,6 +24,7 @@ type DaemonDeps struct {
 }
 
 type DaemonController struct {
+	mu      sync.Mutex
 	deps    DaemonDeps
 	state   DaemonState
 	monitor Monitor
@@ -46,6 +48,8 @@ func (d *DaemonController) State() DaemonState {
 	if d == nil {
 		return DaemonStateInactive
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.state
 }
 
@@ -56,12 +60,18 @@ func (d *DaemonController) FontAtlas() *FontAtlas {
 	return d.deps.FontAtlas
 }
 
-func (d *DaemonController) Show(ctx context.Context) error {
+func (d *DaemonController) Show(ctx context.Context) (err error) {
 	if d == nil {
 		return fmt.Errorf("daemon controller is nil")
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if d.state == DaemonStateOverlayShown {
-		return d.Hide(ctx)
+		if !overlaySurfaceClosed(d.surface) {
+			return d.hideLocked(ctx)
+		}
+		d.clearOverlayStateLocked()
 	}
 	if d.deps.MonitorLookup == nil {
 		return fmt.Errorf("focused monitor lookup is required")
@@ -72,14 +82,32 @@ func (d *DaemonController) Show(ctx context.Context) error {
 
 	d.deps.Trace.Record("state", "show_requested", nil)
 
-	monitor, err := d.deps.MonitorLookup.FocusedMonitor(ctx)
+	focused, err := d.deps.MonitorLookup.FocusedMonitor(ctx)
 	if err != nil {
 		return err
 	}
+	monitor := focused
+	outputs, err := d.deps.Overlay.Outputs(ctx)
+	if err != nil {
+		return err
+	}
+	if len(outputs) > 0 {
+		monitor, err = MatchWaylandOutputByName(outputs, focused)
+		if err != nil {
+			return err
+		}
+	}
+
 	surface, err := d.deps.Overlay.CreateSurface(ctx, monitor)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			_ = surface.Destroy(ctx)
+		}
+	}()
+
 	config := SurfaceConfig{
 		OutputName: monitor.Name,
 		Width:      monitor.Width,
@@ -97,6 +125,7 @@ func (d *DaemonController) Show(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	RenderPlaceholderOverlay(buffer)
 	if d.deps.Renderer != nil {
 		if err := d.deps.Renderer.Present(ctx, surface.ID(), buffer); err != nil {
 			return err
@@ -109,6 +138,7 @@ func (d *DaemonController) Show(ctx context.Context) error {
 	d.monitor = monitor
 	d.surface = surface
 	d.state = DaemonStateOverlayShown
+	d.watchSurfaceClosed(surface)
 	d.deps.Trace.Record("state", "overlay_shown", map[string]any{
 		"output": monitor.Name,
 		"width":  monitor.Width,
@@ -121,7 +151,16 @@ func (d *DaemonController) Show(ctx context.Context) error {
 }
 
 func (d *DaemonController) Hide(ctx context.Context) error {
-	if d == nil || d.state == DaemonStateInactive {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.hideLocked(ctx)
+}
+
+func (d *DaemonController) hideLocked(ctx context.Context) error {
+	if d.state == DaemonStateInactive {
 		return nil
 	}
 	if d.surface != nil {
@@ -129,17 +168,24 @@ func (d *DaemonController) Hide(ctx context.Context) error {
 			return err
 		}
 	}
+	d.clearOverlayStateLocked()
+	d.deps.Trace.Record("state", "overlay_hidden", nil)
+	return nil
+}
+
+func (d *DaemonController) clearOverlayStateLocked() {
 	d.surface = nil
 	d.monitor = Monitor{}
 	d.state = DaemonStateInactive
-	d.deps.Trace.Record("state", "overlay_hidden", nil)
-	return nil
 }
 
 func (d *DaemonController) ClickAt(ctx context.Context, p Point, button PointerButton, clickCount int, groupID string) error {
 	if d == nil {
 		return fmt.Errorf("daemon controller is nil")
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if d.state != DaemonStateOverlayShown {
 		return fmt.Errorf("cannot click while daemon state is %q", d.state)
 	}
@@ -169,4 +215,40 @@ func (d *DaemonController) ClickAt(ctx context.Context, p Point, button PointerB
 		"group_id":    groupID,
 	})
 	return nil
+}
+
+func (d *DaemonController) watchSurfaceClosed(surface OverlaySurface) {
+	if surface == nil {
+		return
+	}
+	closed := surface.Closed()
+	if closed == nil {
+		return
+	}
+	go func() {
+		<-closed
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.surface != surface || d.state != DaemonStateOverlayShown {
+			return
+		}
+		d.clearOverlayStateLocked()
+		d.deps.Trace.Record("state", "overlay_closed", nil)
+	}()
+}
+
+func overlaySurfaceClosed(surface OverlaySurface) bool {
+	if surface == nil {
+		return true
+	}
+	closed := surface.Closed()
+	if closed == nil {
+		return false
+	}
+	select {
+	case <-closed:
+		return true
+	default:
+		return false
+	}
 }

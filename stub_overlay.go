@@ -29,6 +29,15 @@ func NewHyprlandBackedStubDaemonController(trace TraceRecorder, atlas *FontAtlas
 	})
 }
 
+func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, atlas *FontAtlas, wayland *WaylandClient) *DaemonController {
+	return NewDaemonController(DaemonDeps{
+		MonitorLookup: NewHyprlandIPCClientFromEnv(),
+		Overlay:       NewLayerShellOverlayBackend(wayland),
+		FontAtlas:     atlas,
+		Trace:         trace,
+	})
+}
+
 type staticFocusedMonitorLookup struct {
 	monitor Monitor
 }
@@ -77,5 +86,9 @@ func (stubOverlaySurface) Render(context.Context, ARGBBuffer) error {
 }
 
 func (stubOverlaySurface) Destroy(context.Context) error {
+	return nil
+}
+
+func (stubOverlaySurface) Closed() <-chan struct{} {
 	return nil
 }

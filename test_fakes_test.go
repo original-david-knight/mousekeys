@@ -157,13 +157,14 @@ type fakeWaylandBackend struct {
 }
 
 type fakeWaylandEvent struct {
-	Kind       string
-	SurfaceID  string
-	OutputName string
-	Width      int
-	Height     int
-	Scale      float64
-	BufferHash string
+	Kind                  string
+	SurfaceID             string
+	OutputName            string
+	Width                 int
+	Height                int
+	Scale                 float64
+	KeyboardInteractivity string
+	BufferHash            string
 }
 
 func newFakeWaylandBackend(outputs ...Monitor) *fakeWaylandBackend {
@@ -189,7 +190,7 @@ func (f *fakeWaylandBackend) CreateSurface(_ context.Context, monitor Monitor) (
 		Height:     monitor.Height,
 		Scale:      monitor.Scale,
 	})
-	return &fakeOverlaySurface{backend: f, id: id}, nil
+	return &fakeOverlaySurface{backend: f, id: id, closed: make(chan struct{})}, nil
 }
 
 func (f *fakeWaylandBackend) Events() []fakeWaylandEvent {
@@ -215,8 +216,12 @@ func (f *fakeWaylandBackend) record(event fakeWaylandEvent) {
 }
 
 type fakeOverlaySurface struct {
-	backend *fakeWaylandBackend
-	id      string
+	backend      *fakeWaylandBackend
+	id           string
+	config       SurfaceConfig
+	bufferActive bool
+	closed       chan struct{}
+	closeOnce    sync.Once
 }
 
 func (s *fakeOverlaySurface) ID() string {
@@ -224,6 +229,7 @@ func (s *fakeOverlaySurface) ID() string {
 }
 
 func (s *fakeOverlaySurface) Configure(_ context.Context, config SurfaceConfig) error {
+	s.config = config
 	s.backend.record(fakeWaylandEvent{
 		Kind:       "configure",
 		SurfaceID:  s.id,
@@ -236,7 +242,11 @@ func (s *fakeOverlaySurface) Configure(_ context.Context, config SurfaceConfig) 
 }
 
 func (s *fakeOverlaySurface) GrabKeyboard(context.Context) error {
-	s.backend.record(fakeWaylandEvent{Kind: "keyboard_grab", SurfaceID: s.id})
+	s.backend.record(fakeWaylandEvent{
+		Kind:                  "keyboard_grab",
+		SurfaceID:             s.id,
+		KeyboardInteractivity: "exclusive",
+	})
 	return nil
 }
 
@@ -245,6 +255,10 @@ func (s *fakeOverlaySurface) Render(_ context.Context, buffer ARGBBuffer) error 
 	if err != nil {
 		return err
 	}
+	if s.bufferActive {
+		s.backend.record(fakeWaylandEvent{Kind: "buffer_destroy", SurfaceID: s.id})
+	}
+	s.bufferActive = true
 	s.backend.record(fakeWaylandEvent{
 		Kind:       "render",
 		SurfaceID:  s.id,
@@ -256,8 +270,69 @@ func (s *fakeOverlaySurface) Render(_ context.Context, buffer ARGBBuffer) error 
 }
 
 func (s *fakeOverlaySurface) Destroy(context.Context) error {
+	if s.bufferActive {
+		s.backend.record(fakeWaylandEvent{Kind: "buffer_destroy", SurfaceID: s.id})
+		s.bufferActive = false
+	}
 	s.backend.record(fakeWaylandEvent{Kind: "destroy", SurfaceID: s.id})
+	s.closeOnce.Do(func() {
+		close(s.closed)
+	})
 	return nil
+}
+
+func (s *fakeOverlaySurface) Closed() <-chan struct{} {
+	return s.closed
+}
+
+func (s *fakeOverlaySurface) SimulateCompositorClosed(ctx context.Context) error {
+	s.backend.record(fakeWaylandEvent{Kind: "closed", SurfaceID: s.id})
+	return s.Destroy(ctx)
+}
+
+func (s *fakeOverlaySurface) SimulateConfigure(ctx context.Context, width int, height int) error {
+	config := s.config
+	config.Width = width
+	config.Height = height
+	s.backend.record(fakeWaylandEvent{
+		Kind:       "configure_event",
+		SurfaceID:  s.id,
+		OutputName: config.OutputName,
+		Width:      width,
+		Height:     height,
+		Scale:      config.Scale,
+	})
+	if err := s.Configure(ctx, config); err != nil {
+		return err
+	}
+	buffer, err := NewARGBBuffer(width, height)
+	if err != nil {
+		return err
+	}
+	RenderPlaceholderOverlay(buffer)
+	return s.Render(ctx, buffer)
+}
+
+func (s *fakeOverlaySurface) SimulateScale(ctx context.Context, scale float64) error {
+	config := s.config
+	config.Scale = scale
+	s.backend.record(fakeWaylandEvent{
+		Kind:       "scale_event",
+		SurfaceID:  s.id,
+		OutputName: config.OutputName,
+		Width:      config.Width,
+		Height:     config.Height,
+		Scale:      scale,
+	})
+	if err := s.Configure(ctx, config); err != nil {
+		return err
+	}
+	buffer, err := NewARGBBuffer(config.Width, config.Height)
+	if err != nil {
+		return err
+	}
+	RenderPlaceholderOverlay(buffer)
+	return s.Render(ctx, buffer)
 }
 
 type fakeRendererSink struct {
