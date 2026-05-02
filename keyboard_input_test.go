@@ -108,7 +108,7 @@ func TestKeyboardInputMapperLettersCommandsReleasesAndRepeats(t *testing.T) {
 
 func TestKeyboardInputMapperRejectsInvalidConfigKeysyms(t *testing.T) {
 	config := DefaultConfig()
-	config.Keybinds.LeftClick = KeySequence{KeySym("NotAKeysym")}
+	config.Keybinds.LeftClick = KeySequence{{KeySym: KeySym("NotAKeysym")}}
 
 	_, err := NewKeyboardInputMapper(config)
 	if err == nil {
@@ -125,15 +125,15 @@ func TestKeyboardInputMapperDoesNotEmitDoubleClickSequenceCommand(t *testing.T) 
 		t.Fatalf("new keyboard input mapper: %v", err)
 	}
 
-	token, ok := mapper.Translate(KeyboardEvent{Key: "Return", Pressed: true})
+	token, ok := mapper.Translate(KeyboardEvent{Key: "space", Pressed: true})
 	if !ok {
-		t.Fatalf("Return did not produce a token")
+		t.Fatalf("space did not produce a token")
 	}
 	if tokenHasCommand(token, KeyboardCommandDoubleClick) {
-		t.Fatalf("Return token includes double_click command even though double-click is a sequence: %+v", token.Commands)
+		t.Fatalf("space token includes double_click command even though double-click is a sequence: %+v", token.Commands)
 	}
 	if !tokenHasCommand(token, KeyboardCommandLeftClick) {
-		t.Fatalf("Return token lacks left_click command: %+v", token.Commands)
+		t.Fatalf("space token lacks left_click command: %+v", token.Commands)
 	}
 }
 
@@ -154,11 +154,47 @@ func TestKeyboardInputMapperEmitsArrowKeysForSubgridNavigation(t *testing.T) {
 	}
 }
 
-func TestKeyboardInputMapperTreatsKeypadEnterAsReturnForDefaultClickBindings(t *testing.T) {
+func TestKeyboardInputMapperUsesDefaultSpaceClickBindings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	mapper, err := NewKeyboardInputMapper(DefaultConfig())
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+	keyboard := newFakeKeyboardEventSource(4)
+	tokens, err := mapper.Tokens(ctx, keyboard)
+	if err != nil {
+		t.Fatalf("keyboard tokens: %v", err)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "space", Pressed: true})
+	first := receiveKeyboardToken(t, tokens)
+	if first.KeySym != "space" || !tokenHasCommand(first, KeyboardCommandLeftClick) || tokenHasCommand(first, KeyboardCommandRightClick) || tokenHasCommand(first, KeyboardCommandDoubleClick) {
+		t.Fatalf("first space token = %+v, want left click only", first)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "space", Pressed: true})
+	second := receiveKeyboardToken(t, tokens)
+	if second.KeySym != "space" || !tokenHasCommand(second, KeyboardCommandLeftClick) || tokenHasCommand(second, KeyboardCommandRightClick) || !tokenHasCommand(second, KeyboardCommandDoubleClick) {
+		t.Fatalf("second space token = %+v, want left click and double click", second)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "space", Pressed: true, Modifiers: KeyboardModifiers{Shift: true}})
+	shiftSpace := receiveKeyboardToken(t, tokens)
+	if shiftSpace.KeySym != "space" || !shiftSpace.Modifiers.Shift || !tokenHasCommand(shiftSpace, KeyboardCommandRightClick) || tokenHasCommand(shiftSpace, KeyboardCommandLeftClick) || tokenHasCommand(shiftSpace, KeyboardCommandDoubleClick) {
+		t.Fatalf("Shift-space token = %+v, want right click only", shiftSpace)
+	}
+}
+
+func TestKeyboardInputMapperTreatsKeypadEnterAsReturnForConfiguredClickBindings(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	config := DefaultConfig()
+	config.Keybinds.LeftClick = mustParseKeySequence("Return")
+	config.Keybinds.DoubleClick = mustParseKeySequence("Return Return")
+	mapper, err := NewKeyboardInputMapper(config)
 	if err != nil {
 		t.Fatalf("new keyboard input mapper: %v", err)
 	}
@@ -183,6 +219,8 @@ func TestKeyboardInputMapperTreatsKeypadEnterAsReturnForDefaultClickBindings(t *
 
 func TestKeyboardInputMapperPrefersExactKeypadEnterBinding(t *testing.T) {
 	config := DefaultConfig()
+	config.Keybinds.LeftClick = mustParseKeySequence("Return")
+	config.Keybinds.DoubleClick = mustParseKeySequence("Return Return")
 	config.Keybinds.RightClick = mustParseKeySequence("KP_Enter")
 	mapper, err := NewKeyboardInputMapper(config)
 	if err != nil {

@@ -50,13 +50,13 @@ func TestHarnessFakesAndTraceStubFlow(t *testing.T) {
 	}
 	keyboard.Send(KeyboardEvent{Key: "B", Pressed: true, Time: clock.Now()})
 	keyboard.Send(KeyboardEvent{Key: "C", Pressed: true, Time: clock.Now()})
-	keyboard.Send(KeyboardEvent{Key: "Return", Pressed: true, Time: clock.Now()})
+	keyboard.Send(KeyboardEvent{Key: "space", Pressed: true, Time: clock.Now()})
 
 	colEvent := <-events
 	rowEvent := <-events
 	commitEvent := <-events
-	if commitEvent.Key != "Return" {
-		t.Fatalf("commit key = %q, want Return", commitEvent.Key)
+	if commitEvent.Key != "space" {
+		t.Fatalf("commit key = %q, want space", commitEvent.Key)
 	}
 
 	point, err := GridCellCenter(focused, 26, keyIndex(t, colEvent.Key), keyIndex(t, rowEvent.Key))

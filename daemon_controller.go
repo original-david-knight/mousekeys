@@ -47,7 +47,7 @@ type DaemonController struct {
 type pendingClick struct {
 	id       int64
 	point    Point
-	firstKey KeySym
+	firstKey KeyBindingStep
 	groupID  string
 	timer    Timer
 	cancel   chan struct{}
@@ -435,12 +435,12 @@ func (d *DaemonController) handleLeftClickLocked(ctx context.Context, token Keyb
 	if d.pendingLeft != nil {
 		return nil
 	}
-	firstKey := d.tokenKeySymLocked(token)
+	firstKey, hasFirstKey := d.tokenKeyBindingStepLocked(token)
 	point, ok, err := d.prepareClickPointLocked(ctx)
 	if err != nil || !ok {
 		return err
 	}
-	if d.leftClickCanBecomeDoubleClickLocked(firstKey) {
+	if hasFirstKey && d.leftClickCanBecomeDoubleClickLocked(firstKey) {
 		d.schedulePendingLeftClickLocked(ctx, point, firstKey)
 		return nil
 	}
@@ -466,43 +466,50 @@ func (d *DaemonController) prepareClickPointLocked(ctx context.Context) (Point, 
 	return d.currentPoint, true, nil
 }
 
-func (d *DaemonController) leftClickCanBecomeDoubleClickLocked(keysym KeySym) bool {
-	if keysym == "" {
+func (d *DaemonController) leftClickCanBecomeDoubleClickLocked(firstKey KeyBindingStep) bool {
+	if firstKey.KeySym == "" {
 		return false
 	}
 	sequence := d.configLocked().Keybinds.DoubleClick
-	return len(sequence) == 2 && keySymSatisfiesBinding(keysym, sequence[0])
+	return len(sequence) == 2 && keyStepSatisfiesBinding(firstKey, sequence[0])
 }
 
 func (d *DaemonController) tokenCompletesPendingDoubleClickLocked(token KeyboardToken) bool {
 	if d.pendingLeft == nil {
 		return false
 	}
-	keysym := d.tokenKeySymLocked(token)
-	if keysym == "" {
+	step, ok := d.tokenKeyBindingStepLocked(token)
+	if !ok {
 		return false
 	}
 	sequence := d.configLocked().Keybinds.DoubleClick
 	return len(sequence) == 2 &&
-		keySymSatisfiesBinding(d.pendingLeft.firstKey, sequence[0]) &&
-		keySymSatisfiesBinding(keysym, sequence[1])
+		keyStepSatisfiesBinding(d.pendingLeft.firstKey, sequence[0]) &&
+		keyStepSatisfiesBinding(step, sequence[1])
 }
 
-func (d *DaemonController) tokenKeySymLocked(token KeyboardToken) KeySym {
+func (d *DaemonController) tokenKeyBindingStepLocked(token KeyboardToken) (KeyBindingStep, bool) {
 	if token.KeySym != "" {
-		return token.KeySym
+		return KeyBindingStep{KeySym: token.KeySym, Modifiers: token.Modifiers}, true
 	}
 	config := d.configLocked()
 	if tokenHasKeyboardCommand(token, KeyboardCommandLeftClick) && len(config.Keybinds.LeftClick) == 1 {
-		return config.Keybinds.LeftClick[0]
+		return config.Keybinds.LeftClick[0], true
 	}
 	if tokenHasKeyboardCommand(token, KeyboardCommandDoubleClick) && len(config.Keybinds.DoubleClick) == 2 {
-		return config.Keybinds.DoubleClick[1]
+		return config.Keybinds.DoubleClick[1], true
 	}
-	return ""
+	return KeyBindingStep{}, false
 }
 
-func (d *DaemonController) schedulePendingLeftClickLocked(ctx context.Context, point Point, firstKey KeySym) {
+func keyStepSatisfiesBinding(input KeyBindingStep, binding KeyBindingStep) bool {
+	if input.Modifiers != binding.Modifiers {
+		return false
+	}
+	return keySymSatisfiesBinding(input.KeySym, binding.KeySym)
+}
+
+func (d *DaemonController) schedulePendingLeftClickLocked(ctx context.Context, point Point, firstKey KeyBindingStep) {
 	d.cancelPendingLeftClickLocked()
 	timer := d.deps.Clock.After(time.Duration(d.configLocked().Behavior.DoubleClickTimeoutMS) * time.Millisecond)
 	pending := &pendingClick{
@@ -517,7 +524,7 @@ func (d *DaemonController) schedulePendingLeftClickLocked(ctx context.Context, p
 	d.deps.Trace.Record("fsm", "left_click_pending", map[string]any{
 		"x":          point.X,
 		"y":          point.Y,
-		"first_key":  string(firstKey),
+		"first_key":  firstKey.String(),
 		"group_id":   pending.groupID,
 		"timeout_ms": d.configLocked().Behavior.DoubleClickTimeoutMS,
 	})

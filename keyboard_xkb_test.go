@@ -46,17 +46,21 @@ func TestXKBKeyboardSourceTranslatesRawKeymapEventsToTokens(t *testing.T) {
 	raw.SendKey(evdevKeyLeftShift, false, now)
 	assertNoKeyboardToken(t, tokens)
 
-	raw.SendKey(evdevKeyReturn, true, now)
+	raw.SendKey(evdevKeySpace, true, now)
 	token := receiveKeyboardToken(t, tokens)
-	if token.Kind != KeyboardTokenCommand || token.KeySym != "Return" || !tokenHasCommand(token, KeyboardCommandLeftClick) {
-		t.Fatalf("token = %+v, want Return left_click command", token)
+	if token.Kind != KeyboardTokenCommand || token.KeySym != "space" || !tokenHasCommand(token, KeyboardCommandLeftClick) || tokenHasCommand(token, KeyboardCommandRightClick) {
+		t.Fatalf("token = %+v, want space left_click command", token)
 	}
 
+	raw.SendKey(evdevKeySpace, false, now)
+	raw.SendKey(evdevKeyLeftShift, true, now)
 	raw.SendKey(evdevKeySpace, true, now)
 	token = receiveKeyboardToken(t, tokens)
-	if token.Kind != KeyboardTokenCommand || token.KeySym != "space" || !tokenHasCommand(token, KeyboardCommandRightClick) {
-		t.Fatalf("token = %+v, want space right_click command", token)
+	if token.Kind != KeyboardTokenCommand || token.KeySym != "space" || !token.Modifiers.Shift || !tokenHasCommand(token, KeyboardCommandRightClick) || tokenHasCommand(token, KeyboardCommandLeftClick) {
+		t.Fatalf("token = %+v, want Shift-space right_click command", token)
 	}
+	raw.SendKey(evdevKeySpace, false, now)
+	raw.SendKey(evdevKeyLeftShift, false, now)
 
 	raw.SendKey(evdevKeyTab, true, now)
 	token = receiveKeyboardToken(t, tokens)
@@ -92,29 +96,29 @@ func TestXKBKeyboardSourceIgnoresReleasesAndRepeatsAndResetsOnLeaveDestroy(t *te
 	now := time.Date(2026, 5, 1, 13, 30, 0, 0, time.UTC)
 	raw.SendKeymap(defaultUSKeymapForTest(t))
 
-	raw.SendKey(evdevKeyReturn, true, now)
-	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
-	raw.SendKey(evdevKeyReturn, true, now)
+	raw.SendKey(evdevKeySpace, true, now)
+	requireCommandToken(t, tokens, "space", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeySpace, true, now)
 	assertNoKeyboardToken(t, tokens)
 
 	raw.SendLeave(now)
 	assertNoKeyboardToken(t, tokens)
-	raw.SendKey(evdevKeyReturn, true, now)
-	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeySpace, true, now)
+	requireCommandToken(t, tokens, "space", KeyboardCommandLeftClick)
 
 	raw.SendDestroy(now)
 	assertNoKeyboardToken(t, tokens)
 	raw.SendKeymap(defaultUSKeymapForTest(t))
-	raw.SendKey(evdevKeyReturn, true, now)
-	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeySpace, true, now)
+	requireCommandToken(t, tokens, "space", KeyboardCommandLeftClick)
 
-	raw.SendKey(evdevKeyReturn, false, now)
+	raw.SendKey(evdevKeySpace, false, now)
 	assertNoKeyboardToken(t, tokens)
-	raw.SendKey(evdevKeyReturn, true, now)
-	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeySpace, true, now)
+	requireCommandToken(t, tokens, "space", KeyboardCommandLeftClick)
 }
 
-func TestXKBKeyboardSourceMapsKeypadEnterToDefaultClickCommand(t *testing.T) {
+func TestXKBKeyboardSourceMapsShiftSpaceToDefaultRightClickCommand(t *testing.T) {
 	raw := newFakeRawKeyboardEventSource(16)
 	source := NewXKBKeyboardEventSource(raw)
 	mapper, err := NewKeyboardInputMapper(DefaultConfig())
@@ -128,8 +132,13 @@ func TestXKBKeyboardSourceMapsKeypadEnterToDefaultClickCommand(t *testing.T) {
 
 	now := time.Date(2026, 5, 1, 13, 35, 0, 0, time.UTC)
 	raw.SendKeymap(defaultUSKeymapForTest(t))
-	raw.SendKey(evdevKeyKPEnter, true, now)
-	requireCommandToken(t, tokens, "KP_Enter", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeyLeftShift, true, now)
+	assertNoKeyboardToken(t, tokens)
+	raw.SendKey(evdevKeySpace, true, now)
+	token := receiveKeyboardToken(t, tokens)
+	if token.KeySym != "space" || !token.Modifiers.Shift || !tokenHasCommand(token, KeyboardCommandRightClick) || tokenHasCommand(token, KeyboardCommandLeftClick) {
+		t.Fatalf("token = %+v, want Shift-space right_click only", token)
+	}
 }
 
 func TestXKBKeyboardSourceEnterSeedsPressedKeys(t *testing.T) {
@@ -146,14 +155,14 @@ func TestXKBKeyboardSourceEnterSeedsPressedKeys(t *testing.T) {
 
 	now := time.Date(2026, 5, 1, 13, 40, 0, 0, time.UTC)
 	raw.SendKeymap(defaultUSKeymapForTest(t))
-	raw.SendEnter(now, evdevKeyReturn)
+	raw.SendEnter(now, evdevKeySpace)
 	assertNoKeyboardToken(t, tokens)
-	raw.SendKey(evdevKeyReturn, true, now)
+	raw.SendKey(evdevKeySpace, true, now)
 	assertNoKeyboardToken(t, tokens)
-	raw.SendKey(evdevKeyReturn, false, now)
+	raw.SendKey(evdevKeySpace, false, now)
 	assertNoKeyboardToken(t, tokens)
-	raw.SendKey(evdevKeyReturn, true, now)
-	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
+	raw.SendKey(evdevKeySpace, true, now)
+	requireCommandToken(t, tokens, "space", KeyboardCommandLeftClick)
 }
 
 func TestXKBKeyboardSourceLeaveClearsPressedModifiers(t *testing.T) {

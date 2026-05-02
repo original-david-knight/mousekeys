@@ -59,7 +59,7 @@ grid_opacity = 0.75
 		t.Fatalf("grid.subgrid_pixel_size = %d, want default 5", config.Grid.SubgridPixelSize)
 	}
 	assertSequence(t, config.Keybinds.LeftClick, "space", "Return")
-	assertSequence(t, config.Keybinds.RightClick, "space")
+	assertSequence(t, config.Keybinds.RightClick, "Shift-space")
 	if config.Behavior.StayActive {
 		t.Fatalf("behavior.stay_active = true, want false")
 	}
@@ -153,6 +153,12 @@ func TestParseKeySequence(t *testing.T) {
 	}
 	assertSequence(t, sequence, "space", "Tab", "BackSpace")
 
+	sequence, err = ParseKeySequence("Shift-space SHIFT-Return shift+Tab")
+	if err != nil {
+		t.Fatalf("parse shifted key sequence: %v", err)
+	}
+	assertSequence(t, sequence, "Shift-space", "Shift-Return", "Shift-Tab")
+
 	if _, err := ParseKeySequence("Return NotAKeysym"); err == nil {
 		t.Fatalf("parse invalid sequence succeeded")
 	}
@@ -169,9 +175,9 @@ func assertDefaultConfig(t *testing.T, config Config) {
 	if config.Grid.SubgridPixelSize != 5 {
 		t.Fatalf("grid.subgrid_pixel_size = %d, want 5", config.Grid.SubgridPixelSize)
 	}
-	assertSequence(t, config.Keybinds.LeftClick, "Return")
-	assertSequence(t, config.Keybinds.RightClick, "space")
-	assertSequence(t, config.Keybinds.DoubleClick, "Return", "Return")
+	assertSequence(t, config.Keybinds.LeftClick, "space")
+	assertSequence(t, config.Keybinds.RightClick, "Shift-space")
+	assertSequence(t, config.Keybinds.DoubleClick, "space", "space")
 	assertSequence(t, config.Keybinds.CommitPartial, "Tab")
 	assertSequence(t, config.Keybinds.Exit, "Escape")
 	assertSequence(t, config.Keybinds.Backspace, "BackSpace")
@@ -198,8 +204,8 @@ func assertSequence(t *testing.T, got KeySequence, want ...string) {
 		t.Fatalf("sequence length = %d, want %d: %+v", len(got), len(want), got.Names())
 	}
 	for i, name := range want {
-		if string(got[i]) != name {
-			t.Fatalf("sequence[%d] = %q, want %q: %+v", i, got[i], name, got.Names())
+		if got[i].String() != name {
+			t.Fatalf("sequence[%d] = %q, want %q: %+v", i, got[i].String(), name, got.Names())
 		}
 	}
 }

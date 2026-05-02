@@ -15,7 +15,7 @@ The daemon is normally started as a persistent user service. The short-lived `mo
 
 ## Usage
 
-Run `mousekeys show` with your global Hyprland keybind. Type two letters to select a main-grid cell; the pointer moves to that cell center immediately, the main grid disappears, and only the selected-cell outline remains. Use Vim movement keys or arrow keys to move by hidden sub-cell steps: `H`/Left, `J`/Down, `K`/Up, and `L`/Right. Movement can continue outside the selected cell and clamps only at the focused monitor edges. Press `Return` for left click, `space` for right click, or `Escape` to exit without clicking.
+Run `mousekeys show` with your global Hyprland keybind. Type two letters to select a main-grid cell; the pointer moves to that cell center immediately, the main grid disappears, and only the selected-cell outline remains. Use Vim movement keys or arrow keys to move by hidden sub-cell steps: `H`/Left, `J`/Down, `K`/Up, and `L`/Right. Movement can continue outside the selected cell and clamps only at the focused monitor edges. Press `space` for left click, `Shift-space` for right click, or `Escape` to exit without clicking.
 
 ## Hyprland Trigger Keybind
 
@@ -103,7 +103,7 @@ Mouse Keys creates its default config on first daemon start:
 ~/.config/mousekeys/config.toml
 ```
 
-The config is reloaded when the daemon restarts. There is no live config reload in v1. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`. The default `Return` binding also accepts keypad Enter (`KP_Enter`).
+The config is reloaded when the daemon restarts. There is no live config reload in v1. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`. Use the optional `Shift-` prefix for shifted key chords, for example `Shift-space`.
 
 Default `config.toml`:
 
@@ -113,9 +113,9 @@ size = 26                    # 26x26 main grid
 subgrid_pixel_size = 5       # target pixel size per sub-cell
 
 [keybinds]
-left_click = "Return"
-right_click = "space"
-double_click = "Return Return"
+left_click = "space"
+right_click = "Shift-space"
+double_click = "space space"
 exit = "Escape"
 backspace = "BackSpace"
 

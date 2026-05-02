@@ -33,6 +33,25 @@ The grid overlay must remain translucent while staying legible across light, dar
   - `L` or Right moves right.
 - Movement is not limited to the selected cell. It can continue across the focused monitor and clamps only at the focused monitor edges.
 
+## Default Click Key Bindings
+
+The default in-overlay click bindings are:
+
+- `Space` performs a left click.
+- `Shift` + `Space` performs a right click.
+- `Space` `Space` within `behavior.double_click_timeout_ms` performs a double click.
+
+Config values use xkbcommon keysym names. Shifted key chords are written with the `Shift-` prefix:
+
+```toml
+[keybinds]
+left_click = "space"
+right_click = "Shift-space"
+double_click = "space space"
+```
+
+The right-click binding must be treated as a modifier chord, not as a two-key sequence. Pressing `Shift-space` must not start or complete the default left-click double-click timeout.
+
 ### Wayland Alpha Handling
 
 - The renderer stores logical overlay pixels as straight ARGB for internal composition and snapshot tests.
@@ -47,4 +66,7 @@ The grid overlay must remain translucent while staying legible across light, dar
 - Edge letters are green-tinted, outlined, and readable against varied backgrounds.
 - The selected-cell outline remains visible after coordinate entry while the rest of the grid is hidden.
 - H/J/K/L and arrow keys move through the hidden subcell grid and can move outside the selected cell until the focused monitor edge.
+- `Space` left-clicks at the committed cursor point after the double-click timeout.
+- `Shift-space` right-clicks at the committed cursor point without emitting a left click.
+- `Space Space` within the double-click timeout emits exactly two left-button clicks at the committed cursor point without reopening the main grid between clicks.
 - Scaled-monitor rendering still uses logical coordinates and expands pixels correctly for Wayland buffer scale.

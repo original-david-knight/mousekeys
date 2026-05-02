@@ -13,14 +13,14 @@ func TestDaemonLeftClickWaitsForTimeoutThenStaysActive(t *testing.T) {
 	beforePresentations := len(renderer.Presentations())
 	beforeButtons := countPointerClicks(pointer, PointerButtonLeft)
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle first Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle first Space: %v", err)
 	}
 	if got := countPointerClicks(pointer, PointerButtonLeft); got != beforeButtons {
-		t.Fatalf("left clicks immediately after first Enter = %d, want %d", got, beforeButtons)
+		t.Fatalf("left clicks immediately after first Space = %d, want %d", got, beforeButtons)
 	}
 	if got := len(renderer.Presentations()); got != beforePresentations {
-		t.Fatalf("renderer presentations immediately after first Enter = %d, want %d", got, beforePresentations)
+		t.Fatalf("renderer presentations immediately after first Space = %d, want %d", got, beforePresentations)
 	}
 
 	clock.Advance(249 * time.Millisecond)
@@ -37,16 +37,16 @@ func TestDaemonLeftClickWaitsForTimeoutThenStaysActive(t *testing.T) {
 	}
 }
 
-func TestDaemonKeypadEnterUsesDefaultLeftClickTimeout(t *testing.T) {
+func TestDaemonSpaceUsesDefaultLeftClickTimeout(t *testing.T) {
 	ctx := context.Background()
 	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle keypad Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle Space: %v", err)
 	}
 	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
-		t.Fatalf("left clicks immediately after keypad Enter = %d, want 0", got)
+		t.Fatalf("left clicks immediately after Space = %d, want 0", got)
 	}
 
 	clock.Advance(time.Duration(config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
@@ -61,11 +61,11 @@ func TestDaemonDoubleClickDoesNotReopenMainGridBetweenClicks(t *testing.T) {
 	beforePresentations := len(renderer.Presentations())
 	beforeRenders := wayland.Count("render")
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle first Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle first Space: %v", err)
 	}
 	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
-		t.Fatalf("left clicks after first Enter = %d, want 0", got)
+		t.Fatalf("left clicks after first Space = %d, want 0", got)
 	}
 	if got := len(renderer.Presentations()); got != beforePresentations {
 		t.Fatalf("renderer presentations between double-click keys = %d, want %d", got, beforePresentations)
@@ -74,8 +74,8 @@ func TestDaemonDoubleClickDoesNotReopenMainGridBetweenClicks(t *testing.T) {
 		t.Fatalf("surface renders between double-click keys = %d, want %d", got, beforeRenders)
 	}
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle second Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle second Space: %v", err)
 	}
 	waitForPointerClickCount(t, pointer, PointerButtonLeft, 2)
 	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
@@ -86,16 +86,16 @@ func TestDaemonDoubleClickDoesNotReopenMainGridBetweenClicks(t *testing.T) {
 	assertLastRendererHashMatchesMainGrid(t, renderer, focused, config, atlas, DefaultMainGridHUD, nil)
 }
 
-func TestDaemonKeypadEnterCompletesDefaultDoubleClick(t *testing.T) {
+func TestDaemonSpaceCompletesDefaultDoubleClick(t *testing.T) {
 	ctx := context.Background()
 	controller, _, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle first keypad Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle first Space: %v", err)
 	}
-	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle second keypad Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle second Space: %v", err)
 	}
 
 	waitForPointerClickCount(t, pointer, PointerButtonLeft, 2)
@@ -107,8 +107,8 @@ func TestDaemonRightClickAndStayActiveFalseExitAfterClick(t *testing.T) {
 	controller, _, pointer, _, wayland, focused, config, _ := newClickActionTestController(t, false)
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandRightClick)); err != nil {
-		t.Fatalf("handle Space right click: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, shiftedCommandToken("space", KeyboardCommandRightClick)); err != nil {
+		t.Fatalf("handle Shift-space right click: %v", err)
 	}
 	waitForPointerClickCount(t, pointer, PointerButtonRight, 1)
 	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
@@ -117,6 +117,30 @@ func TestDaemonRightClickAndStayActiveFalseExitAfterClick(t *testing.T) {
 	}
 	if got := wayland.Count("destroy"); got != 1 {
 		t.Fatalf("surface destroy count = %d, want 1", got)
+	}
+}
+
+func TestDaemonShiftSpaceRightClickCancelsPendingLeftClick(t *testing.T) {
+	ctx := context.Background()
+	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
+	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
+
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle pending Space: %v", err)
+	}
+	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
+		t.Fatalf("left clicks immediately after Space = %d, want 0", got)
+	}
+
+	if err := controller.HandleKeyboardToken(ctx, shiftedCommandToken("space", KeyboardCommandRightClick)); err != nil {
+		t.Fatalf("handle Shift-space right click: %v", err)
+	}
+	waitForPointerClickCount(t, pointer, PointerButtonRight, 1)
+	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
+
+	clock.Advance(time.Duration(config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
+	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
+		t.Fatalf("left clicks after Shift-space canceled timeout = %d, want 0", got)
 	}
 }
 
@@ -133,8 +157,8 @@ func TestDaemonHJKLThenRightClickUsesRefinedPoint(t *testing.T) {
 	refined := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'J')
 	assertLastPointerMotion(t, pointer, focused, refined)
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandRightClick)); err != nil {
-		t.Fatalf("handle Space after H/J: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, shiftedCommandToken("space", KeyboardCommandRightClick)); err != nil {
+		t.Fatalf("handle Shift-space after H/J: %v", err)
 	}
 	waitForPointerClickCount(t, pointer, PointerButtonRight, 1)
 	assertLastPointerMotion(t, pointer, focused, refined)
@@ -149,8 +173,8 @@ func TestDaemonClickUsesCurrentHiddenSubgridPoint(t *testing.T) {
 	}
 	refined := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'L')
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle Enter after hidden subgrid move: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle Space after hidden subgrid move: %v", err)
 	}
 	assertLastPointerMotion(t, pointer, focused, refined)
 	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
@@ -167,8 +191,8 @@ func TestDaemonEscCancelsPendingClickAndOverridesStayActive(t *testing.T) {
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
 	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
 
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle pending Enter: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle pending Space: %v", err)
 	}
 	if err := controller.HandleKeyboardToken(ctx, commandToken("Escape", KeyboardCommandExit)); err != nil {
 		t.Fatalf("handle Escape: %v", err)
@@ -224,6 +248,12 @@ func commandToken(key string, command KeyboardCommand) KeyboardToken {
 		KeySym:   KeySym(key),
 		Commands: []KeyboardCommand{command},
 	}
+}
+
+func shiftedCommandToken(key string, command KeyboardCommand) KeyboardToken {
+	token := commandToken(key, command)
+	token.Modifiers = KeyboardModifiers{Shift: true}
+	return token
 }
 
 func countPointerClicks(pointer *virtualPointerRecorder, button PointerButton) int {

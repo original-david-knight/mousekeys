@@ -600,6 +600,7 @@ func (f *fakeKeyboardEventSource) Send(event KeyboardEvent) {
 		"key":     event.Key,
 		"pressed": event.Pressed,
 		"repeat":  event.Repeat,
+		"shift":   event.Modifiers.Shift,
 		"time":    event.Time.UTC().Format(time.RFC3339Nano),
 	})
 	f.ch <- event

@@ -62,11 +62,12 @@ const (
 )
 
 type KeyboardToken struct {
-	Kind     KeyboardTokenKind
-	Letter   byte
-	KeySym   KeySym
-	Commands []KeyboardCommand
-	Time     time.Time
+	Kind      KeyboardTokenKind
+	Letter    byte
+	KeySym    KeySym
+	Modifiers KeyboardModifiers
+	Commands  []KeyboardCommand
+	Time      time.Time
 }
 
 type KeyboardInputMapper struct {
@@ -107,9 +108,9 @@ func keySymSatisfiesBinding(input KeySym, binding KeySym) bool {
 	return false
 }
 
-func keySymAcceptedInputs(binding KeySym) []KeySym {
-	inputs := []KeySym{binding}
-	inputs = append(inputs, keySymInputAliases[binding]...)
+func keyStepAcceptedInputs(binding KeyBindingStep) []KeySym {
+	inputs := []KeySym{binding.KeySym}
+	inputs = append(inputs, keySymInputAliases[binding.KeySym]...)
 	return inputs
 }
 
@@ -128,8 +129,8 @@ func NewKeyboardInputMapper(config Config) (*KeyboardInputMapper, error) {
 	interesting := make(map[KeySym]struct{})
 	var sequenceBindings []keyboardBinding
 	for _, binding := range bindings {
-		for _, sym := range binding.sequence {
-			for _, input := range keySymAcceptedInputs(sym) {
+		for _, step := range binding.sequence {
+			for _, input := range keyStepAcceptedInputs(step) {
 				interesting[input] = struct{}{}
 			}
 		}
@@ -204,14 +205,15 @@ func (m *KeyboardInputMapper) Translate(event KeyboardEvent) (KeyboardToken, boo
 	}
 
 	keysym := KeySym(event.Key)
-	commands := m.commandsForKey(keysym)
+	commands := m.commandsForEvent(keysym, event.Modifiers)
 	if letter, ok := letterFromKeysymName(event.Key); ok {
 		return KeyboardToken{
-			Kind:     KeyboardTokenLetter,
-			Letter:   letter,
-			KeySym:   keysym,
-			Commands: commands,
-			Time:     event.Time,
+			Kind:      KeyboardTokenLetter,
+			Letter:    letter,
+			KeySym:    keysym,
+			Modifiers: event.Modifiers,
+			Commands:  commands,
+			Time:      event.Time,
 		}, true
 	}
 	if len(commands) == 0 {
@@ -220,26 +222,52 @@ func (m *KeyboardInputMapper) Translate(event KeyboardEvent) (KeyboardToken, boo
 		}
 	}
 	return KeyboardToken{
-		Kind:     KeyboardTokenCommand,
-		KeySym:   keysym,
-		Commands: commands,
-		Time:     event.Time,
+		Kind:      KeyboardTokenCommand,
+		KeySym:    keysym,
+		Modifiers: event.Modifiers,
+		Commands:  commands,
+		Time:      event.Time,
 	}, true
 }
 
-func (m *KeyboardInputMapper) commandsForKey(keysym KeySym) []KeyboardCommand {
+func (m *KeyboardInputMapper) commandsForEvent(keysym KeySym, modifiers KeyboardModifiers) []KeyboardCommand {
+	if commands := m.commandsForSingleStep(keysym, modifiers, true, true); len(commands) > 0 {
+		return commands
+	}
+	if commands := m.commandsForSingleStep(keysym, modifiers, true, false); len(commands) > 0 {
+		return commands
+	}
+	if modifiers.Empty() {
+		return nil
+	}
+	if commands := m.commandsForSingleStep(keysym, KeyboardModifiers{}, false, true); len(commands) > 0 {
+		return commands
+	}
+	return m.commandsForSingleStep(keysym, KeyboardModifiers{}, false, false)
+}
+
+func (m *KeyboardInputMapper) commandsForSingleStep(keysym KeySym, modifiers KeyboardModifiers, exactModifiers bool, exactKey bool) []KeyboardCommand {
 	var commands []KeyboardCommand
 	for _, binding := range m.bindings {
-		if len(binding.sequence) == 1 && binding.sequence[0] == keysym {
-			commands = append(commands, binding.command)
+		if len(binding.sequence) != 1 {
+			continue
 		}
-	}
-	if len(commands) == 0 {
-		for _, binding := range m.bindings {
-			if len(binding.sequence) == 1 && keySymSatisfiesBinding(keysym, binding.sequence[0]) {
-				commands = append(commands, binding.command)
+		step := binding.sequence[0]
+		if exactModifiers {
+			if step.Modifiers != modifiers {
+				continue
 			}
+		} else if !step.Modifiers.Empty() {
+			continue
 		}
+		if exactKey {
+			if step.KeySym != keysym {
+				continue
+			}
+		} else if !keySymSatisfiesBinding(keysym, step.KeySym) {
+			continue
+		}
+		commands = append(commands, binding.command)
 	}
 	sort.Slice(commands, func(i, j int) bool {
 		return commands[i] < commands[j]
@@ -274,13 +302,13 @@ func (m *keyboardSequenceMatcher) Apply(token *KeyboardToken) {
 		}
 
 		switch {
-		case keySymSatisfiesBinding(token.KeySym, binding.sequence[progress]):
+		case keyStepSatisfiesToken(*token, binding.sequence[progress]):
 			progress++
 			if progress == len(binding.sequence) {
 				token.Commands = appendKeyboardCommand(token.Commands, binding.command)
 				progress = 0
 			}
-		case keySymSatisfiesBinding(token.KeySym, binding.sequence[0]):
+		case keyStepSatisfiesToken(*token, binding.sequence[0]):
 			progress = 1
 		default:
 			progress = 0
@@ -290,6 +318,13 @@ func (m *keyboardSequenceMatcher) Apply(token *KeyboardToken) {
 	sort.Slice(token.Commands, func(i, j int) bool {
 		return token.Commands[i] < token.Commands[j]
 	})
+}
+
+func keyStepSatisfiesToken(token KeyboardToken, binding KeyBindingStep) bool {
+	if token.Modifiers != binding.Modifiers {
+		return false
+	}
+	return keySymSatisfiesBinding(token.KeySym, binding.KeySym)
 }
 
 func appendKeyboardCommand(commands []KeyboardCommand, command KeyboardCommand) []KeyboardCommand {
@@ -476,12 +511,13 @@ func translateRawKeyEvent(keymap keyboardKeymapState, pressed map[uint32]struct{
 	}
 
 	return KeyboardEvent{
-		Kind:    KeyboardEventKey,
-		Key:     keysym,
-		Keycode: raw.Keycode,
-		Pressed: raw.Pressed,
-		Repeat:  raw.Pressed && repeat,
-		Time:    raw.Time,
+		Kind:      KeyboardEventKey,
+		Key:       keysym,
+		Keycode:   raw.Keycode,
+		Pressed:   raw.Pressed,
+		Repeat:    raw.Pressed && repeat,
+		Modifiers: keymap.Modifiers(),
+		Time:      raw.Time,
 	}, true
 }
 
@@ -496,6 +532,7 @@ func (s *xkbKeyboardEventSource) emit(ctx context.Context, events chan<- Keyboar
 
 type keyboardKeymapState interface {
 	KeySymName(keycode uint32) (string, error)
+	Modifiers() KeyboardModifiers
 	UpdateKey(keycode uint32, pressed bool)
 	UpdateMask(depressed, latched, locked, group uint32)
 	Reset()

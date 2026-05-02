@@ -15,9 +15,9 @@ size = 26                    # 26x26 main grid
 subgrid_pixel_size = 5       # target pixel size per sub-cell
 
 [keybinds]
-left_click = "Return"
-right_click = "space"
-double_click = "Return Return"
+left_click = "space"
+right_click = "Shift-space"
+double_click = "space space"
 exit = "Escape"
 backspace = "BackSpace"
 
@@ -65,7 +65,12 @@ type AppearanceConfig struct {
 
 type KeySym string
 
-type KeySequence []KeySym
+type KeyBindingStep struct {
+	KeySym    KeySym
+	Modifiers KeyboardModifiers
+}
+
+type KeySequence []KeyBindingStep
 
 func DefaultConfig() Config {
 	return Config{
@@ -74,9 +79,9 @@ func DefaultConfig() Config {
 			SubgridPixelSize: 5,
 		},
 		Keybinds: KeybindsConfig{
-			LeftClick:     mustParseKeySequence("Return"),
-			RightClick:    mustParseKeySequence("space"),
-			DoubleClick:   mustParseKeySequence("Return Return"),
+			LeftClick:     mustParseKeySequence("space"),
+			RightClick:    mustParseKeySequence("Shift-space"),
+			DoubleClick:   mustParseKeySequence("space space"),
 			CommitPartial: mustParseKeySequence("Tab"),
 			Exit:          mustParseKeySequence("Escape"),
 			Backspace:     mustParseKeySequence("BackSpace"),
@@ -180,17 +185,46 @@ func (c Config) Validate() error {
 func ParseKeySequence(value string) (KeySequence, error) {
 	names := strings.Fields(value)
 	if len(names) == 0 {
-		return nil, fmt.Errorf("key sequence must contain at least one xkbcommon keysym name")
+		return nil, fmt.Errorf("key sequence must contain at least one key binding")
 	}
 
 	sequence := make(KeySequence, 0, len(names))
 	for _, name := range names {
-		if !validXKBKeysymName(name) {
-			return nil, fmt.Errorf("invalid xkbcommon keysym name %q", name)
+		step, err := parseKeyBindingStep(name)
+		if err != nil {
+			return nil, err
 		}
-		sequence = append(sequence, KeySym(name))
+		sequence = append(sequence, step)
 	}
 	return sequence, nil
+}
+
+func parseKeyBindingStep(value string) (KeyBindingStep, error) {
+	if value == "" {
+		return KeyBindingStep{}, fmt.Errorf("key binding must contain an xkbcommon keysym name")
+	}
+
+	modifiers := KeyboardModifiers{}
+	name := value
+	for {
+		lower := strings.ToLower(name)
+		switch {
+		case strings.HasPrefix(lower, "shift-"):
+			modifiers.Shift = true
+			name = name[len("shift-"):]
+		case strings.HasPrefix(lower, "shift+"):
+			modifiers.Shift = true
+			name = name[len("shift+"):]
+		default:
+			if name == "" {
+				return KeyBindingStep{}, fmt.Errorf("key binding %q must contain an xkbcommon keysym name", value)
+			}
+			if !validXKBKeysymName(name) {
+				return KeyBindingStep{}, fmt.Errorf("invalid xkbcommon keysym name %q", name)
+			}
+			return KeyBindingStep{KeySym: KeySym(name), Modifiers: modifiers}, nil
+		}
+	}
 }
 
 func (s *KeySequence) UnmarshalText(text []byte) error {
@@ -204,18 +238,25 @@ func (s *KeySequence) UnmarshalText(text []byte) error {
 
 func (s KeySequence) String() string {
 	names := make([]string, 0, len(s))
-	for _, sym := range s {
-		names = append(names, string(sym))
+	for _, step := range s {
+		names = append(names, step.String())
 	}
 	return strings.Join(names, " ")
 }
 
 func (s KeySequence) Names() []string {
 	names := make([]string, 0, len(s))
-	for _, sym := range s {
-		names = append(names, string(sym))
+	for _, step := range s {
+		names = append(names, step.String())
 	}
 	return names
+}
+
+func (s KeyBindingStep) String() string {
+	if s.Modifiers.Shift {
+		return "Shift-" + string(s.KeySym)
+	}
+	return string(s.KeySym)
 }
 
 func ensureConfigFile(path string) error {
@@ -262,10 +303,10 @@ func xdgConfigHome() (string, error) {
 
 func validateKeySequence(field string, sequence KeySequence) error {
 	if len(sequence) == 0 {
-		return fmt.Errorf("%s must contain at least one xkbcommon keysym name", field)
+		return fmt.Errorf("%s must contain at least one key binding", field)
 	}
-	for _, sym := range sequence {
-		name := string(sym)
+	for _, step := range sequence {
+		name := string(step.KeySym)
 		if !validXKBKeysymName(name) {
 			return fmt.Errorf("%s contains invalid xkbcommon keysym name %q", field, name)
 		}

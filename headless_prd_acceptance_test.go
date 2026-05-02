@@ -51,13 +51,13 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		}
 	})
 
-	t.Run("two coordinate letters plus Enter completes a left click in 3-5 keystrokes", func(t *testing.T) {
+	t.Run("two coordinate letters plus Space completes a left click in 3-5 keystrokes", func(t *testing.T) {
 		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
 		h.show()
 
 		cell := h.sendMainCoordinate('M', 'K')
 		h.waitForTraceAction("fsm", "cell_outline_shown")
-		h.sendKeys("Return")
+		h.sendKeys("space")
 		h.waitForTraceAction("fsm", "left_click_pending")
 		if clicks := acceptanceClickCount(h.pointer, PointerButtonLeft); clicks != 0 {
 			h.failf("left clicks before double-click timeout = %d, want 0", clicks)
@@ -71,7 +71,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 			return event.Source == "keyboard" && event.Action == "send"
 		})
 		if len(keyboardSends) != 3 {
-			h.failf("keyboard sends for left-click flow = %d, want M/K/Return", len(keyboardSends))
+			h.failf("keyboard sends for left-click flow = %d, want M/K/space", len(keyboardSends))
 		}
 		triggerToClickKeystrokes := 1 + len(keyboardSends)
 		if triggerToClickKeystrokes < 3 || triggerToClickKeystrokes > 5 {
@@ -106,7 +106,25 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.assertLastRendererHash(outlineHash)
 	})
 
-	t.Run("Enter Enter double-click keeps the same committed cursor and does not reopen main grid between clicks", func(t *testing.T) {
+	t.Run("Shift Space completes a right click without starting a left-click timeout", func(t *testing.T) {
+		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
+		h.show()
+
+		cell := h.sendMainCoordinate('M', 'K')
+		h.waitForTraceAction("fsm", "cell_outline_shown")
+		h.sendKeys("Shift-space")
+		h.waitForClickCount(PointerButtonRight, 1)
+		h.waitForTraceAction("state", "stay_active_reset")
+		h.clock.Advance(time.Duration(h.config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
+
+		if clicks := acceptanceClickCount(h.pointer, PointerButtonLeft); clicks != 0 {
+			h.failf("left clicks after Shift-space and timeout = %d, want 0", clicks)
+		}
+		h.assertPointerButtonsAt(PointerButtonRight, cell.Center(), 1)
+		h.assertTracePointerClick(PointerButtonRight, 1, cell.Center())
+	})
+
+	t.Run("Space Space double-click keeps the same committed cursor and does not reopen main grid between clicks", func(t *testing.T) {
 		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
 		h.show()
 
@@ -114,13 +132,13 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.waitForTraceAction("fsm", "cell_outline_shown")
 		mainGridHash := acceptanceMainGridHash(t, h.focused, h.config, h.atlas, DefaultMainGridHUD, nil)
 
-		h.sendKeys("Return")
+		h.sendKeys("space")
 		h.waitForTraceAction("fsm", "left_click_pending")
 		if clicks := acceptanceClickCount(h.pointer, PointerButtonLeft); clicks != 0 {
-			h.failf("left clicks after first Enter = %d, want 0 while waiting for double-click timeout", clicks)
+			h.failf("left clicks after first Space = %d, want 0 while waiting for double-click timeout", clicks)
 		}
 
-		h.sendKeys("Return")
+		h.sendKeys("space")
 		h.waitForClickCount(PointerButtonLeft, 2)
 		h.waitForTraceAction("state", "stay_active_reset")
 		h.clock.Advance(time.Duration(h.config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
@@ -153,7 +171,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 
 		cell := h.sendMainCoordinate('M', 'K')
 		h.waitForTraceAction("fsm", "cell_outline_shown")
-		h.sendKeys("Return")
+		h.sendKeys("space")
 		h.waitForTraceAction("fsm", "left_click_pending")
 		h.clock.Advance(time.Duration(h.config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
 		h.waitForClickCount(PointerButtonLeft, 1)
@@ -195,7 +213,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.show()
 		cell := h.sendMainCoordinate('M', 'K')
 		h.waitForTraceAction("fsm", "cell_outline_shown")
-		h.sendKeys("Return")
+		h.sendKeys("space")
 		h.waitForTraceAction("fsm", "left_click_pending")
 
 		h.sendKeys("Escape")
@@ -383,11 +401,17 @@ func (h *acceptanceHarness) sendMainCoordinate(col byte, row byte) Rect {
 func (h *acceptanceHarness) sendKeys(keys ...string) {
 	h.t.Helper()
 	for _, key := range keys {
+		modifiers := KeyboardModifiers{}
+		if key == "Shift-space" {
+			key = "space"
+			modifiers.Shift = true
+		}
 		h.keyboard.Send(KeyboardEvent{
-			Kind:    KeyboardEventKey,
-			Key:     key,
-			Pressed: true,
-			Time:    h.clock.Now(),
+			Kind:      KeyboardEventKey,
+			Key:       key,
+			Pressed:   true,
+			Modifiers: modifiers,
+			Time:      h.clock.Now(),
 		})
 	}
 }

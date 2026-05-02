@@ -29,6 +29,10 @@ static char* mousekeys_compile_keymap_from_names(const char *model, const char *
 	xkb_context_unref(context);
 	return out;
 }
+
+static int mousekeys_shift_active(struct xkb_state *state) {
+	return xkb_state_mod_name_is_active(state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
+}
 */
 import "C"
 
@@ -126,6 +130,15 @@ func (s *xkbKeymapState) KeySymName(keycode uint32) (string, error) {
 		return "", fmt.Errorf("xkb keysym name exceeded %d bytes", len(buf))
 	}
 	return C.GoString(&buf[0]), nil
+}
+
+func (s *xkbKeymapState) Modifiers() KeyboardModifiers {
+	if s == nil || s.state == nil {
+		return KeyboardModifiers{}
+	}
+	return KeyboardModifiers{
+		Shift: C.mousekeys_shift_active(s.state) != 0,
+	}
 }
 
 func (s *xkbKeymapState) UpdateKey(keycode uint32, pressed bool) {

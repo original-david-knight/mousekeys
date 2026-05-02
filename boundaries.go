@@ -92,13 +92,22 @@ const (
 )
 
 type KeyboardEvent struct {
-	Kind    KeyboardEventKind
-	Key     string
-	Keycode uint32
-	Pressed bool
-	Repeat  bool
-	Time    time.Time
-	Err     error
+	Kind      KeyboardEventKind
+	Key       string
+	Keycode   uint32
+	Pressed   bool
+	Repeat    bool
+	Modifiers KeyboardModifiers
+	Time      time.Time
+	Err       error
+}
+
+type KeyboardModifiers struct {
+	Shift bool
+}
+
+func (m KeyboardModifiers) Empty() bool {
+	return !m.Shift
 }
 
 type PointerSynthesizer interface {

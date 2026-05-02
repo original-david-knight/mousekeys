@@ -78,12 +78,12 @@ A keyboard-driven mouse control utility for Arch Linux + Hyprland. Triggered by 
 
 ### 4. Commit / click
 Configurable key bindings (defaults shown):
-- `Enter` → **left click**
-- `Space` → **right click**
-- `Enter` `Enter` within `double_click_timeout_ms` → **double click**
+- `Space` → **left click**
+- `Shift` + `Space` → **right click**
+- `Space` `Space` within `double_click_timeout_ms` → **double click**
 - `Esc` → **commit cursor position without clicking** and **exit** the tool
 
-For the default double-click binding, the daemon waits up to `double_click_timeout_ms` after the first `Enter`. If a second `Enter` arrives before the timeout, it emits a double click; otherwise it emits a single left click and then applies stay-active behavior.
+For the default double-click binding, the daemon waits up to `double_click_timeout_ms` after the first `Space`. If a second `Space` arrives before the timeout, it emits a double click; otherwise it emits a single left click and then applies stay-active behavior.
 
 ### 5. Stay-active behavior
 - **Default:** after a click, the tool **stays active** — the main grid re-appears for the next coordinate.
@@ -104,7 +104,7 @@ For the default double-click binding, the daemon waits up to `double_click_timeo
 ### Behavior
 - Auto-created with defaults on first daemon start if missing.
 - Reloaded on daemon restart (no live-reload required in v1).
-- Key names use xkbcommon keysym names, case-sensitive (for example `Return`, `space`, `Tab`, `Escape`, `BackSpace`).
+- Key names use xkbcommon keysym names, case-sensitive (for example `Return`, `space`, `Tab`, `Escape`, `BackSpace`). The optional `Shift-` prefix expresses shifted key chords, for example `Shift-space`.
 
 ### Default contents (illustrative)
 ```toml
@@ -113,9 +113,9 @@ size = 26                    # 26x26 main grid
 subgrid_pixel_size = 5       # target pixel size per sub-cell
 
 [keybinds]
-left_click = "Return"
-right_click = "space"
-double_click = "Return Return"
+left_click = "space"
+right_click = "Shift-space"
+double_click = "space space"
 exit = "Escape"
 backspace = "BackSpace"
 
