@@ -1,0 +1,10 @@
+# Local build output
+/mousekeys
+
+# Go test/build artifacts
+*.test
+*.out
+/coverage/
+
+# Local task runner scratch files
+/.vibedrive/tmp/
