@@ -38,3 +38,6 @@ tasks:
     - id: subgrid-render-and-input
       status: done
       notes: Implemented sub-grid as a transparent full-monitor overlay mode using exact logical cell counts from grid.subgrid_pixel_size. Pointer recorder and renderer snapshot tests now cover center move, visible placement, out-of-range letters, XY refinement, and X-only Tab refinement; click auto-commit remains part of the later commit/click phase.
+    - id: click-commit-actions
+      status: done
+      notes: Implemented pending left-click timer, click auto-commit for partial sub-grid X input, stay-active reset/hide, and Esc cancellation. Tests use the fake clock; double-click completion only runs from a pending first click so stale key sequences cannot trigger later double-clicks.

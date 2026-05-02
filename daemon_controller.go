@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type DaemonState string
@@ -39,6 +40,17 @@ type DaemonController struct {
 	currentPoint    Point
 	havePoint       bool
 	keyboardCancel  context.CancelFunc
+	pendingLeft     *pendingClick
+	clickSerial     int64
+}
+
+type pendingClick struct {
+	id       int64
+	point    Point
+	firstKey KeySym
+	groupID  string
+	timer    Timer
+	cancel   chan struct{}
 }
 
 func NewDaemonController(deps DaemonDeps) *DaemonController {
@@ -313,6 +325,25 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 		d.mu.Unlock()
 		return err
 	}
+	if d.pendingLeft != nil && d.tokenCompletesPendingDoubleClickLocked(token) {
+		err := d.finishPendingDoubleClickLocked(ctx)
+		d.mu.Unlock()
+		return err
+	}
+	if tokenHasKeyboardCommand(token, KeyboardCommandLeftClick) {
+		err := d.handleLeftClickLocked(ctx, token)
+		d.mu.Unlock()
+		return err
+	}
+	if tokenHasKeyboardCommand(token, KeyboardCommandRightClick) {
+		err := d.handleRightClickLocked(ctx)
+		d.mu.Unlock()
+		return err
+	}
+	if tokenHasKeyboardCommand(token, KeyboardCommandDoubleClick) {
+		d.mu.Unlock()
+		return nil
+	}
 
 	if d.subgridEntry != nil {
 		result := d.subgridEntry.HandleToken(token)
@@ -380,6 +411,222 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 		return selectionHandler(ctx, *selected)
 	}
 	return nil
+}
+
+func (d *DaemonController) handleLeftClickLocked(ctx context.Context, token KeyboardToken) error {
+	if d.pendingLeft != nil {
+		return nil
+	}
+	firstKey := d.tokenKeySymLocked(token)
+	point, ok, err := d.prepareClickPointLocked(ctx)
+	if err != nil || !ok {
+		return err
+	}
+	if d.leftClickCanBecomeDoubleClickLocked(firstKey) {
+		d.schedulePendingLeftClickLocked(ctx, point, firstKey)
+		return nil
+	}
+	return d.emitClickAndApplyBehaviorLocked(ctx, point, PointerButtonLeft, 1, d.nextClickGroupIDLocked())
+}
+
+func (d *DaemonController) handleRightClickLocked(ctx context.Context) error {
+	d.cancelPendingLeftClickLocked()
+	point, ok, err := d.prepareClickPointLocked(ctx)
+	if err != nil || !ok {
+		return err
+	}
+	return d.emitClickAndApplyBehaviorLocked(ctx, point, PointerButtonRight, 1, d.nextClickGroupIDLocked())
+}
+
+func (d *DaemonController) prepareClickPointLocked(ctx context.Context) (Point, bool, error) {
+	if !d.havePoint {
+		return Point{}, false, nil
+	}
+	if d.subgridEntry != nil {
+		result := d.subgridEntry.HandleToken(KeyboardToken{
+			Kind:     KeyboardTokenCommand,
+			Commands: []KeyboardCommand{KeyboardCommandCommitPartial},
+		})
+		if result.Committed != nil {
+			if err := d.commitSubgridRefinementLocked(ctx, *result.Committed); err != nil {
+				return Point{}, false, err
+			}
+		}
+	}
+	if !d.havePoint {
+		return Point{}, false, nil
+	}
+	return d.currentPoint, true, nil
+}
+
+func (d *DaemonController) leftClickCanBecomeDoubleClickLocked(keysym KeySym) bool {
+	if keysym == "" {
+		return false
+	}
+	sequence := d.configLocked().Keybinds.DoubleClick
+	return len(sequence) == 2 && sequence[0] == keysym
+}
+
+func (d *DaemonController) tokenCompletesPendingDoubleClickLocked(token KeyboardToken) bool {
+	if d.pendingLeft == nil {
+		return false
+	}
+	keysym := d.tokenKeySymLocked(token)
+	if keysym == "" {
+		return false
+	}
+	sequence := d.configLocked().Keybinds.DoubleClick
+	return len(sequence) == 2 && sequence[0] == d.pendingLeft.firstKey && sequence[1] == keysym
+}
+
+func (d *DaemonController) tokenKeySymLocked(token KeyboardToken) KeySym {
+	if token.KeySym != "" {
+		return token.KeySym
+	}
+	config := d.configLocked()
+	if tokenHasKeyboardCommand(token, KeyboardCommandLeftClick) && len(config.Keybinds.LeftClick) == 1 {
+		return config.Keybinds.LeftClick[0]
+	}
+	if tokenHasKeyboardCommand(token, KeyboardCommandDoubleClick) && len(config.Keybinds.DoubleClick) == 2 {
+		return config.Keybinds.DoubleClick[1]
+	}
+	return ""
+}
+
+func (d *DaemonController) schedulePendingLeftClickLocked(ctx context.Context, point Point, firstKey KeySym) {
+	d.cancelPendingLeftClickLocked()
+	timer := d.deps.Clock.After(time.Duration(d.configLocked().Behavior.DoubleClickTimeoutMS) * time.Millisecond)
+	pending := &pendingClick{
+		id:       d.nextClickIDLocked(),
+		point:    point,
+		firstKey: firstKey,
+		groupID:  d.currentClickGroupIDLocked(),
+		timer:    timer,
+		cancel:   make(chan struct{}),
+	}
+	d.pendingLeft = pending
+	d.deps.Trace.Record("fsm", "left_click_pending", map[string]any{
+		"x":          point.X,
+		"y":          point.Y,
+		"first_key":  string(firstKey),
+		"group_id":   pending.groupID,
+		"timeout_ms": d.configLocked().Behavior.DoubleClickTimeoutMS,
+	})
+
+	go d.awaitPendingLeftClick(ctx, pending)
+}
+
+func (d *DaemonController) awaitPendingLeftClick(ctx context.Context, pending *pendingClick) {
+	select {
+	case <-pending.timer.C():
+		if err := d.finishPendingSingleLeftClick(ctx, pending.id); err != nil {
+			d.deps.Trace.Record("error", "pending_left_click_failed", map[string]any{"error": err.Error()})
+		}
+	case <-pending.cancel:
+	case <-ctx.Done():
+		d.cancelPendingLeftClickByID(pending.id)
+	}
+}
+
+func (d *DaemonController) finishPendingSingleLeftClick(ctx context.Context, id int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.pendingLeft == nil || d.pendingLeft.id != id {
+		return nil
+	}
+	pending := d.pendingLeft
+	d.pendingLeft = nil
+	if d.state != DaemonStateOverlayShown {
+		return nil
+	}
+	return d.emitClickAndApplyBehaviorLocked(ctx, pending.point, PointerButtonLeft, 1, pending.groupID)
+}
+
+func (d *DaemonController) finishPendingDoubleClickLocked(ctx context.Context) error {
+	if d.pendingLeft == nil {
+		return nil
+	}
+	pending := d.pendingLeft
+	d.cancelPendingLeftClickLocked()
+	if d.state != DaemonStateOverlayShown {
+		return nil
+	}
+	return d.emitClickAndApplyBehaviorLocked(ctx, pending.point, PointerButtonLeft, 2, pending.groupID)
+}
+
+func (d *DaemonController) emitClickAndApplyBehaviorLocked(ctx context.Context, p Point, button PointerButton, clickCount int, groupID string) error {
+	if clickCount == 2 {
+		if err := EmitPointerDoubleClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
+			return err
+		}
+	} else {
+		if err := EmitPointerClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
+			return err
+		}
+	}
+	d.deps.Trace.Record("io", "pointer_click", map[string]any{
+		"output":      d.monitor.Name,
+		"x":           p.X,
+		"y":           p.Y,
+		"button":      string(button),
+		"click_count": clickCount,
+		"group_id":    groupID,
+	})
+	return d.applyPostClickBehaviorLocked(ctx)
+}
+
+func (d *DaemonController) applyPostClickBehaviorLocked(ctx context.Context) error {
+	if !d.configLocked().Behavior.StayActive {
+		return d.hideLocked(ctx)
+	}
+	config := d.configLocked()
+	d.resetCoordinateEntryLocked()
+	d.coordinateEntry = NewMainCoordinateEntryFSM(config.Grid.Size, d.monitor)
+	d.deps.Trace.Record("state", "stay_active_reset", nil)
+	return d.renderActiveMainGridLocked(ctx)
+}
+
+func (d *DaemonController) cancelPendingLeftClickByID(id int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.pendingLeft == nil || d.pendingLeft.id != id {
+		return
+	}
+	d.cancelPendingLeftClickLocked()
+}
+
+func (d *DaemonController) cancelPendingLeftClickLocked() {
+	if d.pendingLeft == nil {
+		return
+	}
+	pending := d.pendingLeft
+	d.pendingLeft = nil
+	if pending.timer != nil {
+		pending.timer.Stop()
+	}
+	if pending.cancel != nil {
+		close(pending.cancel)
+	}
+}
+
+func (d *DaemonController) nextClickIDLocked() int64 {
+	d.clickSerial++
+	return d.clickSerial
+}
+
+func (d *DaemonController) currentClickGroupIDLocked() string {
+	return fmt.Sprintf("click-%d", d.clickSerial)
+}
+
+func (d *DaemonController) nextClickGroupIDLocked() string {
+	return fmt.Sprintf("click-%d", d.nextClickIDLocked())
+}
+
+func (d *DaemonController) configLocked() Config {
+	if d.deps.Config == nil {
+		return DefaultConfig()
+	}
+	return *d.deps.Config
 }
 
 func (d *DaemonController) enterSubgridLocked(ctx context.Context, selected MainCoordinateSelectedEvent) error {
@@ -505,9 +752,11 @@ func (d *DaemonController) Hide(ctx context.Context) error {
 
 func (d *DaemonController) hideLocked(ctx context.Context) error {
 	if d.state == DaemonStateInactive {
+		d.cancelPendingLeftClickLocked()
 		d.resetCoordinateEntryLocked()
 		return nil
 	}
+	d.cancelPendingLeftClickLocked()
 	d.stopKeyboardInputLocked()
 	if d.surface != nil {
 		if err := d.surface.Destroy(ctx); err != nil {
@@ -520,6 +769,7 @@ func (d *DaemonController) hideLocked(ctx context.Context) error {
 }
 
 func (d *DaemonController) clearOverlayStateLocked() {
+	d.cancelPendingLeftClickLocked()
 	d.stopKeyboardInputLocked()
 	d.resetCoordinateEntryLocked()
 	d.surface = nil

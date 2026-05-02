@@ -70,7 +70,9 @@ type KeyboardToken struct {
 }
 
 type KeyboardInputMapper struct {
-	bindings []keyboardBinding
+	bindings         []keyboardBinding
+	interestingKeys  map[KeySym]struct{}
+	sequenceBindings []keyboardBinding
 }
 
 type keyboardBinding struct {
@@ -82,14 +84,28 @@ func NewKeyboardInputMapper(config Config) (*KeyboardInputMapper, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	bindings := []keyboardBinding{
+		{command: KeyboardCommandLeftClick, sequence: config.Keybinds.LeftClick},
+		{command: KeyboardCommandRightClick, sequence: config.Keybinds.RightClick},
+		{command: KeyboardCommandDoubleClick, sequence: config.Keybinds.DoubleClick},
+		{command: KeyboardCommandCommitPartial, sequence: config.Keybinds.CommitPartial},
+		{command: KeyboardCommandExit, sequence: config.Keybinds.Exit},
+		{command: KeyboardCommandBackspace, sequence: config.Keybinds.Backspace},
+	}
+	interesting := make(map[KeySym]struct{})
+	var sequenceBindings []keyboardBinding
+	for _, binding := range bindings {
+		for _, sym := range binding.sequence {
+			interesting[sym] = struct{}{}
+		}
+		if len(binding.sequence) > 1 {
+			sequenceBindings = append(sequenceBindings, binding)
+		}
+	}
 	return &KeyboardInputMapper{
-		bindings: []keyboardBinding{
-			{command: KeyboardCommandLeftClick, sequence: config.Keybinds.LeftClick},
-			{command: KeyboardCommandRightClick, sequence: config.Keybinds.RightClick},
-			{command: KeyboardCommandCommitPartial, sequence: config.Keybinds.CommitPartial},
-			{command: KeyboardCommandExit, sequence: config.Keybinds.Exit},
-			{command: KeyboardCommandBackspace, sequence: config.Keybinds.Backspace},
-		},
+		bindings:         bindings,
+		interestingKeys:  interesting,
+		sequenceBindings: sequenceBindings,
 	}, nil
 }
 
@@ -112,6 +128,7 @@ func (m *KeyboardInputMapper) Tokens(ctx context.Context, source KeyboardEventSo
 	tokens := make(chan KeyboardToken, 32)
 	go func() {
 		defer close(tokens)
+		matcher := newKeyboardSequenceMatcher(m.sequenceBindings)
 		for {
 			select {
 			case <-ctx.Done():
@@ -124,6 +141,7 @@ func (m *KeyboardInputMapper) Tokens(ctx context.Context, source KeyboardEventSo
 				if !ok {
 					continue
 				}
+				matcher.Apply(&token)
 				select {
 				case tokens <- token:
 				case <-ctx.Done():
@@ -159,7 +177,9 @@ func (m *KeyboardInputMapper) Translate(event KeyboardEvent) (KeyboardToken, boo
 		}, true
 	}
 	if len(commands) == 0 {
-		return KeyboardToken{}, false
+		if _, interesting := m.interestingKeys[keysym]; !interesting {
+			return KeyboardToken{}, false
+		}
 	}
 	return KeyboardToken{
 		Kind:     KeyboardTokenCommand,
@@ -180,6 +200,60 @@ func (m *KeyboardInputMapper) commandsForKey(keysym KeySym) []KeyboardCommand {
 		return commands[i] < commands[j]
 	})
 	return commands
+}
+
+type keyboardSequenceMatcher struct {
+	bindings []keyboardBinding
+	progress []int
+}
+
+func newKeyboardSequenceMatcher(bindings []keyboardBinding) *keyboardSequenceMatcher {
+	return &keyboardSequenceMatcher{
+		bindings: append([]keyboardBinding(nil), bindings...),
+		progress: make([]int, len(bindings)),
+	}
+}
+
+func (m *keyboardSequenceMatcher) Apply(token *KeyboardToken) {
+	if m == nil || token == nil || token.KeySym == "" {
+		return
+	}
+
+	for i, binding := range m.bindings {
+		if len(binding.sequence) <= 1 {
+			continue
+		}
+		progress := m.progress[i]
+		if progress < 0 || progress >= len(binding.sequence) {
+			progress = 0
+		}
+
+		switch {
+		case binding.sequence[progress] == token.KeySym:
+			progress++
+			if progress == len(binding.sequence) {
+				token.Commands = appendKeyboardCommand(token.Commands, binding.command)
+				progress = 0
+			}
+		case binding.sequence[0] == token.KeySym:
+			progress = 1
+		default:
+			progress = 0
+		}
+		m.progress[i] = progress
+	}
+	sort.Slice(token.Commands, func(i, j int) bool {
+		return token.Commands[i] < token.Commands[j]
+	})
+}
+
+func appendKeyboardCommand(commands []KeyboardCommand, command KeyboardCommand) []KeyboardCommand {
+	for _, got := range commands {
+		if got == command {
+			return commands
+		}
+	}
+	return append(commands, command)
 }
 
 func letterFromKeysymName(name string) (byte, bool) {

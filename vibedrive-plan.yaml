@@ -567,7 +567,7 @@ tasks:
         inline with this implementation rather than deferring them — the timing
         logic and the no-reopen-between-double-click invariant are the highest
         regression risk in the project.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - subgrid-render-and-input

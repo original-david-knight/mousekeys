@@ -129,6 +129,56 @@ func TestKeyboardInputMapperDoesNotEmitDoubleClickSequenceCommand(t *testing.T) 
 	}
 }
 
+func TestKeyboardInputMapperHonorsConfiguredClickKeySequences(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	config := DefaultConfig()
+	config.Keybinds.LeftClick = mustParseKeySequence("F1")
+	config.Keybinds.RightClick = mustParseKeySequence("F2")
+	config.Keybinds.DoubleClick = mustParseKeySequence("F1 F1")
+	config.Keybinds.CommitPartial = mustParseKeySequence("F3")
+	config.Keybinds.Exit = mustParseKeySequence("F4")
+	config.Keybinds.Backspace = mustParseKeySequence("F5")
+	mapper, err := NewKeyboardInputMapper(config)
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+	keyboard := newFakeKeyboardEventSource(8)
+	tokens, err := mapper.Tokens(ctx, keyboard)
+	if err != nil {
+		t.Fatalf("keyboard tokens: %v", err)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "F1", Pressed: true})
+	first := receiveKeyboardToken(t, tokens)
+	if !tokenHasCommand(first, KeyboardCommandLeftClick) || tokenHasCommand(first, KeyboardCommandDoubleClick) {
+		t.Fatalf("first F1 token commands = %+v, want left click only", first.Commands)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "F1", Pressed: true})
+	second := receiveKeyboardToken(t, tokens)
+	if !tokenHasCommand(second, KeyboardCommandLeftClick) || !tokenHasCommand(second, KeyboardCommandDoubleClick) {
+		t.Fatalf("second F1 token commands = %+v, want left click and double click", second.Commands)
+	}
+
+	for _, tt := range []struct {
+		key     string
+		command KeyboardCommand
+	}{
+		{key: "F2", command: KeyboardCommandRightClick},
+		{key: "F3", command: KeyboardCommandCommitPartial},
+		{key: "F4", command: KeyboardCommandExit},
+		{key: "F5", command: KeyboardCommandBackspace},
+	} {
+		keyboard.Send(KeyboardEvent{Key: tt.key, Pressed: true})
+		token := receiveKeyboardToken(t, tokens)
+		if !tokenHasCommand(token, tt.command) {
+			t.Fatalf("%s token commands = %+v, want %s", tt.key, token.Commands, tt.command)
+		}
+	}
+}
+
 func TestKeyboardInputTokensUsesFakeKeyboardSource(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
