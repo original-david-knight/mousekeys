@@ -197,7 +197,7 @@ func TestRenderSubgridOverlayLabelsOnlyTopAndLeftEdges(t *testing.T) {
 
 	for y := geometry.Display.Y; y < geometry.Display.Y+geometry.Display.Height; y++ {
 		for x := geometry.Display.X; x < geometry.Display.X+geometry.Display.Width; x++ {
-			if argbAt(buffer, x, y) != 0xffffffff {
+			if !isGridLabelForegroundPixel(argbAt(buffer, x, y)) {
 				continue
 			}
 			onTop := y >= topBand.Y && y < topBand.Y+topBand.Height

@@ -64,8 +64,8 @@ func TestRenderMainGridOverlaySnapshotHashes(t *testing.T) {
 		height int
 		want   string
 	}{
-		{name: "square", width: 520, height: 520, want: "e8cace5c7ce46e00c8ebca04459082ac7531601dfef5d6db6814aaa3bdaab0fd"},
-		{name: "non-square", width: 780, height: 520, want: "9e67e904900f66d8ccf000cb16284cadd9c75d0047a2cef9bbcc1bb10af0539b"},
+		{name: "square", width: 520, height: 520, want: "59f902f0cb62c115bbf136f68ff3bccecb49155f3c701afff5f15cf348c3f8df"},
+		{name: "non-square", width: 780, height: 520, want: "553c1de62af38f537843c7e9af31c04ff95de4317b92d7aa8252d3a568535074"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			buffer, err := NewARGBBuffer(tt.width, tt.height)
@@ -115,14 +115,17 @@ func TestRenderMainGridOverlayUsesAppearanceConfigAndHUDString(t *testing.T) {
 		t.Fatalf("render main grid: %v", err)
 	}
 
-	const lineColor = uint32(0x40ffffff)
+	lineColor := gridLineCoreColor(appearance.GridOpacity)
 	for _, x := range []int{99, 100, 101} {
 		if got := argbAt(buffer, x, 35); got != lineColor {
 			t.Fatalf("configured grid line pixel %d,35 = %#x, want %#x", x, got, lineColor)
 		}
 	}
-	if got := argbAt(buffer, 98, 35); got != 0 {
-		t.Fatalf("pixel beside configured 3px grid line = %#x, want transparent", got)
+	if got, want := argbAt(buffer, 98, 35), gridLineHaloColor(appearance.GridOpacity); got != want {
+		t.Fatalf("configured grid halo pixel = %#x, want %#x", got, want)
+	}
+	if got := argbAt(buffer, 97, 35); got != 0 {
+		t.Fatalf("pixel beside configured grid halo = %#x, want transparent", got)
 	}
 
 	assertEdgeHasLabelInk(t, buffer, Rect{X: 0, Y: 0, Width: buffer.Width, Height: 20}, "top")
@@ -253,7 +256,7 @@ func TestRenderMainGridOverlayClipsLabelsToEdgeCells(t *testing.T) {
 
 	for y := 0; y < buffer.Height; y++ {
 		for x := 0; x < buffer.Width; x++ {
-			if argbAt(buffer, x, y) != 0xffffffff {
+			if !isGridLabelForegroundPixel(argbAt(buffer, x, y)) {
 				continue
 			}
 			onTop := y >= topY0 && y < topY1
@@ -351,7 +354,7 @@ func assertEdgeHasLabelInk(t *testing.T, buffer ARGBBuffer, rect Rect, edge stri
 	}
 	for y := rect.Y; y < rect.Y+rect.Height; y++ {
 		for x := rect.X; x < rect.X+rect.Width; x++ {
-			if argbAt(buffer, x, y) == 0xffffffff {
+			if isGridLabelForegroundPixel(argbAt(buffer, x, y)) {
 				return
 			}
 		}
@@ -370,4 +373,12 @@ func mustARGBHash(t *testing.T, buffer ARGBBuffer) string {
 		t.Fatalf("ARGB hash: %v", err)
 	}
 	return hash
+}
+
+func isGridLabelForegroundPixel(pixel uint32) bool {
+	alpha := (pixel >> 24) & 0xff
+	red := (pixel >> 16) & 0xff
+	green := (pixel >> 8) & 0xff
+	blue := pixel & 0xff
+	return alpha >= 0xe0 && red <= 0xa0 && green >= 0xd0 && blue >= 0x90
 }

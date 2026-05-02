@@ -61,8 +61,8 @@ func TestLogicalARGBBufferScalingExpandsLogicalPixels(t *testing.T) {
 		t.Fatalf("new logical buffer: %v", err)
 	}
 	pixels := []uint32{
-		0xff102030, 0xff405060,
-		0xff708090, 0xffa0b0c0,
+		0x80102030, 0x4080c0ff,
+		0x00ffffff, 0xffff8040,
 	}
 	copy(logical.Pixels, pixels)
 
@@ -73,7 +73,7 @@ func TestLogicalARGBBufferScalingExpandsLogicalPixels(t *testing.T) {
 
 	for y := 0; y < physicalHeight; y++ {
 		for x := 0; x < physicalWidth; x++ {
-			want := pixels[(y/scale)*logical.Stride+(x/scale)]
+			want := premultiplyARGB(pixels[(y/scale)*logical.Stride+(x/scale)])
 			if got := littleEndianARGBAt(dst, physicalWidth, x, y); got != want {
 				t.Fatalf("physical pixel %d,%d = %#x, want logical pixel %d,%d %#x", x, y, got, x/scale, y/scale, want)
 			}
@@ -124,7 +124,7 @@ func TestScaledFocusedMonitorGridSnapshotUsesLogicalCoordinates(t *testing.T) {
 		t.Fatalf("render expected scaled-monitor grid: %v", err)
 	}
 
-	const wantHash = "0668f39dab34ee13dd9a74e0688391a025d16e9fce92c34ee4cbba0e98b00657"
+	const wantHash = "8456abebc0f67d04a084c8cee2d57acb3ec42734b87d678714f6d25711558f1f"
 	if got := mustARGBHash(t, buffer); got != wantHash {
 		t.Fatalf("scaled focused-monitor grid snapshot hash = %s, want %s", got, wantHash)
 	}
@@ -132,7 +132,7 @@ func TestScaledFocusedMonitorGridSnapshotUsesLogicalCoordinates(t *testing.T) {
 		t.Fatalf("renderer hash = %s, want scaled grid snapshot %s", presentation.Hash, wantHash)
 	}
 
-	lineColor := uint32(opacityToAlpha(config.Appearance.GridOpacity)<<24) | 0x00ffffff
+	lineColor := gridLineCoreColor(config.Appearance.GridOpacity)
 	vertical := axisBoundary(focused.Width, config.Grid.Size, 13)
 	rowY0, rowY1, err := axisSegment(focused.Height, config.Grid.Size, 13)
 	if err != nil {

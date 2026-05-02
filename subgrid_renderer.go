@@ -71,12 +71,26 @@ func drawSubgridBackground(buffer ARGBBuffer, display Rect) {
 
 func drawSubgridLines(buffer ARGBBuffer, options SubgridRenderOptions) {
 	display := options.Geometry.Display
-	alpha := opacityToAlpha(options.Appearance.GridOpacity)
-	if alpha == 0 {
+	lineColor := gridLineCoreColor(options.Appearance.GridOpacity)
+	if lineColor == 0 {
 		return
 	}
-	lineColor := uint32(alpha<<24) | 0x00ffffff
+	haloColor := gridLineHaloColor(options.Appearance.GridOpacity)
 	lineWidth := options.Appearance.GridLineWidth
+	haloWidth := gridLineHaloWidth(lineWidth)
+
+	if haloColor != 0 && haloWidth > lineWidth {
+		for col := 0; col <= options.Geometry.XCount; col++ {
+			boundary := axisBoundary(display.Width, options.Geometry.XCount, col)
+			start, end := lineSpanForBoundary(boundary, display.Width, haloWidth)
+			blendRect(buffer, Rect{X: display.X + start, Y: display.Y, Width: end - start, Height: display.Height}, haloColor)
+		}
+		for row := 0; row <= options.Geometry.YCount; row++ {
+			boundary := axisBoundary(display.Height, options.Geometry.YCount, row)
+			start, end := lineSpanForBoundary(boundary, display.Height, haloWidth)
+			blendRect(buffer, Rect{X: display.X, Y: display.Y + start, Width: display.Width, Height: end - start}, haloColor)
+		}
+	}
 
 	for col := 0; col <= options.Geometry.XCount; col++ {
 		boundary := axisBoundary(display.Width, options.Geometry.XCount, col)
@@ -94,7 +108,6 @@ func drawSubgridEdgeLabels(buffer ARGBBuffer, options SubgridRenderOptions) erro
 	display := options.Geometry.Display
 	atlas := options.FontAtlas
 	pad := edgeLabelPadding(options.Appearance.LabelFontSize)
-	labelColor := uint32(0xffffffff)
 
 	topY0, topY1, err := axisSegment(display.Height, options.Geometry.YCount, 0)
 	if err != nil {
@@ -123,7 +136,7 @@ func drawSubgridEdgeLabels(buffer ARGBBuffer, options SubgridRenderOptions) erro
 		}
 		textX := centeredInSpan(cell.X, cell.X+cell.Width, textWidth)
 		textY := edgeAlignedInSpan(cell.Y, cell.Y+cell.Height, textHeight, pad, false)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, textX, textY, labelColor, cell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, textX, textY, cell); err != nil {
 			return err
 		}
 	}
@@ -146,7 +159,7 @@ func drawSubgridEdgeLabels(buffer ARGBBuffer, options SubgridRenderOptions) erro
 		}
 		textX := edgeAlignedInSpan(cell.X, cell.X+cell.Width, textWidth, pad, false)
 		textY := centeredInSpan(cell.Y, cell.Y+cell.Height, textHeight)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, textX, textY, labelColor, cell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, textX, textY, cell); err != nil {
 			return err
 		}
 	}

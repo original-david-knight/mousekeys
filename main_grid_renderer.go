@@ -8,6 +8,13 @@ import (
 const (
 	mainGridLetters    = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	DefaultMainGridHUD = "__"
+
+	gridLineRGB            = 0x004ea8ff
+	gridLineHaloRGB        = 0x0008172d
+	gridLabelForeground    = 0xf078ffc4
+	gridLabelHalo          = 0xd0002015
+	gridLabelHaloOffset    = 1
+	gridLineHaloWidthExtra = 2
 )
 
 type MainGridRenderOptions struct {
@@ -123,12 +130,26 @@ func clearARGBBuffer(buffer ARGBBuffer) {
 }
 
 func drawMainGridLines(buffer ARGBBuffer, gridSize int, appearance AppearanceConfig) {
-	alpha := opacityToAlpha(appearance.GridOpacity)
-	if alpha == 0 {
+	lineColor := gridLineCoreColor(appearance.GridOpacity)
+	if lineColor == 0 {
 		return
 	}
-	lineColor := uint32(alpha<<24) | 0x00ffffff
+	haloColor := gridLineHaloColor(appearance.GridOpacity)
 	lineWidth := appearance.GridLineWidth
+	haloWidth := gridLineHaloWidth(lineWidth)
+
+	if haloColor != 0 && haloWidth > lineWidth {
+		for col := 0; col <= gridSize; col++ {
+			boundary := axisBoundary(buffer.Width, gridSize, col)
+			start, end := lineSpanForBoundary(boundary, buffer.Width, haloWidth)
+			blendRect(buffer, Rect{X: start, Y: 0, Width: end - start, Height: buffer.Height}, haloColor)
+		}
+		for row := 0; row <= gridSize; row++ {
+			boundary := axisBoundary(buffer.Height, gridSize, row)
+			start, end := lineSpanForBoundary(boundary, buffer.Height, haloWidth)
+			blendRect(buffer, Rect{X: 0, Y: start, Width: buffer.Width, Height: end - start}, haloColor)
+		}
+	}
 
 	for col := 0; col <= gridSize; col++ {
 		boundary := axisBoundary(buffer.Width, gridSize, col)
@@ -146,7 +167,6 @@ func drawMainGridEdgeLabels(buffer ARGBBuffer, options MainGridRenderOptions) er
 	atlas := options.FontAtlas
 	gridSize := options.GridSize
 	pad := edgeLabelPadding(options.Appearance.LabelFontSize)
-	labelColor := uint32(0xffffffff)
 
 	topY0, topY1, err := axisSegment(buffer.Height, gridSize, 0)
 	if err != nil {
@@ -181,13 +201,13 @@ func drawMainGridEdgeLabels(buffer ARGBBuffer, options MainGridRenderOptions) er
 
 		topX := centeredInSpan(colX0, colX1, textWidth)
 		topY := edgeAlignedInSpan(topY0, topY1, textHeight, pad, false)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, topX, topY, labelColor, topCell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, topX, topY, topCell); err != nil {
 			return err
 		}
 
 		bottomX := centeredInSpan(colX0, colX1, textWidth)
 		bottomY := edgeAlignedInSpan(bottomY0, bottomY1, textHeight, pad, true)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, bottomX, bottomY, labelColor, bottomCell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, bottomX, bottomY, bottomCell); err != nil {
 			return err
 		}
 
@@ -200,13 +220,13 @@ func drawMainGridEdgeLabels(buffer ARGBBuffer, options MainGridRenderOptions) er
 
 		leftX := edgeAlignedInSpan(leftX0, leftX1, textWidth, pad, false)
 		leftY := centeredInSpan(rowY0, rowY1, textHeight)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, leftX, leftY, labelColor, leftCell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, leftX, leftY, leftCell); err != nil {
 			return err
 		}
 
 		rightX := edgeAlignedInSpan(rightX0, rightX1, textWidth, pad, true)
 		rightY := centeredInSpan(rowY0, rowY1, textHeight)
-		if err := compositeTextClipped(buffer, atlas, FontRoleLabel, text, rightX, rightY, labelColor, rightCell); err != nil {
+		if err := compositeGridLabel(buffer, atlas, FontRoleLabel, text, rightX, rightY, rightCell); err != nil {
 			return err
 		}
 	}
@@ -313,6 +333,33 @@ func opacityToAlpha(opacity float64) int {
 		return 255
 	}
 	return int(math.Round(opacity * 255))
+}
+
+func gridLineCoreColor(opacity float64) uint32 {
+	alpha := opacityToAlpha(opacity)
+	if alpha == 0 {
+		return 0
+	}
+	return uint32(alpha<<24) | gridLineRGB
+}
+
+func gridLineHaloColor(opacity float64) uint32 {
+	alpha := opacityToAlpha(opacity)
+	if alpha == 0 {
+		return 0
+	}
+	haloAlpha := (alpha*3 + 2) / 4
+	if haloAlpha <= 0 {
+		return 0
+	}
+	return uint32(haloAlpha<<24) | gridLineHaloRGB
+}
+
+func gridLineHaloWidth(lineWidth int) int {
+	if lineWidth <= 0 {
+		return 0
+	}
+	return lineWidth + gridLineHaloWidthExtra
 }
 
 func edgeLabelPadding(fontSize int) int {
@@ -432,6 +479,20 @@ func compositeTextClipped(dst ARGBBuffer, atlas *FontAtlas, role FontRole, text 
 		cursorX += glyph.Advance
 	}
 	return nil
+}
+
+func compositeGridLabel(dst ARGBBuffer, atlas *FontAtlas, role FontRole, text string, x, y int, clip Rect) error {
+	for offsetY := -gridLabelHaloOffset; offsetY <= gridLabelHaloOffset; offsetY++ {
+		for offsetX := -gridLabelHaloOffset; offsetX <= gridLabelHaloOffset; offsetX++ {
+			if offsetX == 0 && offsetY == 0 {
+				continue
+			}
+			if err := compositeTextClipped(dst, atlas, role, text, x+offsetX, y+offsetY, gridLabelHalo, clip); err != nil {
+				return err
+			}
+		}
+	}
+	return compositeTextClipped(dst, atlas, role, text, x, y, gridLabelForeground, clip)
 }
 
 func compositeGlyphClipped(dst ARGBBuffer, glyph GlyphBitmap, x, y int, color uint32, clip Rect) error {

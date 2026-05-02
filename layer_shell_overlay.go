@@ -762,11 +762,26 @@ func copyARGBToWaylandSHM(dst []byte, src ARGBBuffer, scale int) {
 		srcY := y / scale
 		for x := 0; x < src.Width*scale; x++ {
 			srcX := x / scale
-			pixel := src.Pixels[srcY*src.Stride+srcX]
+			pixel := premultiplyARGB(src.Pixels[srcY*src.Stride+srcX])
 			offset := ((y * src.Width * scale) + x) * 4
 			binary.LittleEndian.PutUint32(dst[offset:offset+4], pixel)
 		}
 	}
+}
+
+func premultiplyARGB(pixel uint32) uint32 {
+	// wl_shm ARGB buffers are consumed as premultiplied alpha by compositors.
+	alpha := int((pixel >> 24) & 0xff)
+	if alpha == 0 {
+		return 0
+	}
+	if alpha == 255 {
+		return pixel
+	}
+	red := div255(int((pixel>>16)&0xff) * alpha)
+	green := div255(int((pixel>>8)&0xff) * alpha)
+	blue := div255(int(pixel&0xff) * alpha)
+	return uint32(alpha<<24 | red<<16 | green<<8 | blue)
 }
 
 func validateSurfaceConfig(config SurfaceConfig) error {
