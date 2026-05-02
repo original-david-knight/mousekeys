@@ -753,7 +753,7 @@ tasks:
         - State the v1 non-goals (no click-and-drag, no scroll, no X11, no
           multi-monitor selection, no GUI config tool, no live config reload,
           no recursive sub-sub-grid).
-      status: todo
+      status: done
       workflow: implement
       deps:
         - ipc-socket-and-toggle

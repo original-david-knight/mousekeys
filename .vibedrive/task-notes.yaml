@@ -50,3 +50,6 @@ tasks:
     - id: systemd-user-unit
       status: done
       notes: Added root mousekeys.service as a systemd user unit using /usr/bin/env mousekeys daemon, Restart=on-failure, and an ExecStartPre guard for XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE. README now documents user-unit copy, enable, journal, and disable steps; autostart docs intentionally left for docs-hyprland-and-install. systemd-analyze --user verify mousekeys.service exited 0; output only included an unrelated executable-bit warning for ~/.config/systemd/user/elephant.service.
+    - id: docs-hyprland-and-install
+      status: done
+      notes: README-only docs update. Shipped mousekeys.service already uses /usr/bin/env mousekeys daemon with a Hyprland env ExecStartPre check; DefaultConfigTOML matches the PRD defaults.
