@@ -711,7 +711,7 @@ tasks:
         The Hyprland-autostart alternative ("exec-once = mousekeys daemon" or
         the Lua equivalent) is documented in docs-hyprland-and-install rather
         than here.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

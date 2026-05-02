@@ -47,3 +47,6 @@ tasks:
     - id: headless-prd-acceptance-suite
       status: done
       notes: Review found post-stay-active renderer hash assertions could race the reset render. Fixed by polling for the expected latest renderer hash; go test ./... and race acceptance suite pass.
+    - id: systemd-user-unit
+      status: done
+      notes: Added root mousekeys.service as a systemd user unit using /usr/bin/env mousekeys daemon, Restart=on-failure, and an ExecStartPre guard for XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE. README now documents user-unit copy, enable, journal, and disable steps; autostart docs intentionally left for docs-hyprland-and-install. systemd-analyze --user verify mousekeys.service exited 0; output only included an unrelated executable-bit warning for ~/.config/systemd/user/elephant.service.
