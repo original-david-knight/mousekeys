@@ -354,7 +354,7 @@ tasks:
         Use the fake keyboard source from test-harness-and-observability for
         deterministic tests; a real compositor is not required to verify this
         task.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base

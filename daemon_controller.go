@@ -16,6 +16,7 @@ const (
 type DaemonDeps struct {
 	MonitorLookup FocusedMonitorLookup
 	Overlay       WaylandOverlayBackend
+	Keyboard      KeyboardEventSource
 	Renderer      RendererBufferSink
 	FontAtlas     *FontAtlas
 	Pointer       PointerSynthesizer

@@ -23,3 +23,6 @@ tasks:
     - id: wlr-layer-shell-overlay
       status: done
       notes: 'Review fixes added nil-safe real surface lifecycle handling, non-dropping event enqueue, and controller recovery after compositor-initiated close. A fake Wayland protocol test now drives the production layerShellSurface configure/render/release/output-change/destroy path. Manual check: in Hyprland, focus each monitor, run mousekeys show, confirm the translucent placeholder appears only on the focused monitor, then mousekeys hide removes it.'
+    - id: wayland-keyboard-input
+      status: done
+      notes: 'Review fixes made raw Wayland keyboard events reliable: sends no longer drop keymap/error events, Close is coordinated with emits, enter/leave/destroy/keymap reset pressed bookkeeping, and modifier/keymap-reset paths are covered. Double-click remains a later timing/FSM concern, not a one-key mapper token.'

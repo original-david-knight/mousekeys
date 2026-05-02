@@ -33,6 +33,7 @@ func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, atlas *FontAt
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: NewHyprlandIPCClientFromEnv(),
 		Overlay:       NewLayerShellOverlayBackend(wayland),
+		Keyboard:      NewXKBKeyboardEventSource(NewWaylandKeyboardRawEventSource(wayland)),
 		FontAtlas:     atlas,
 		Trace:         trace,
 	})

@@ -75,10 +75,24 @@ type KeyboardEventSource interface {
 	Events(context.Context) (<-chan KeyboardEvent, error)
 }
 
+type KeyboardEventKind string
+
+const (
+	KeyboardEventKey     KeyboardEventKind = "key"
+	KeyboardEventEnter   KeyboardEventKind = "enter"
+	KeyboardEventLeave   KeyboardEventKind = "leave"
+	KeyboardEventDestroy KeyboardEventKind = "destroy"
+	KeyboardEventError   KeyboardEventKind = "error"
+)
+
 type KeyboardEvent struct {
+	Kind    KeyboardEventKind
 	Key     string
+	Keycode uint32
 	Pressed bool
+	Repeat  bool
 	Time    time.Time
+	Err     error
 }
 
 type PointerSynthesizer interface {
