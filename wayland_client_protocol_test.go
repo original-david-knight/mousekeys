@@ -75,6 +75,11 @@ func TestOpenWaylandClientInitializesFromFakeProtocol(t *testing.T) {
 			t.Fatalf("requests did not include %q: %+v", want, requests)
 		}
 	}
+	for _, bind := range responder.Binds() {
+		if want := len(bind.iface) + 1; bind.ifaceWireLen != want {
+			t.Fatalf("bind %s string wire length = %d, want %d", bind.iface, bind.ifaceWireLen, want)
+		}
+	}
 }
 
 func TestOpenWaylandClientReportsSeatCapabilityFailureFromFakeProtocol(t *testing.T) {
@@ -104,6 +109,7 @@ type fakeWaylandProtocolResponder struct {
 
 	mu       sync.Mutex
 	requests []string
+	binds    []fakeWaylandBind
 }
 
 type fakeWaylandProtocolOutput struct {
@@ -196,6 +202,12 @@ func (r *fakeWaylandProtocolResponder) Requests() []string {
 	return append([]string(nil), r.requests...)
 }
 
+func (r *fakeWaylandProtocolResponder) Binds() []fakeWaylandBind {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]fakeWaylandBind(nil), r.binds...)
+}
+
 func (r *fakeWaylandProtocolResponder) outputNameForObject(outputID uint32, outputGlobalByObject map[uint32]uint32) string {
 	globalName := outputGlobalByObject[outputID]
 	for _, output := range r.outputs {
@@ -254,6 +266,7 @@ func (r *fakeWaylandProtocolResponder) handle(conn net.Conn) {
 			stage++
 		case request.sender == registryID && request.opcode == 0:
 			bind := parseFakeWaylandBind(request.payload)
+			r.recordBind(bind)
 			boundByGlobal[bind.globalName] = bind.objectID
 			if bind.iface == waylandInterfaceOutput {
 				outputGlobalByObject[bind.objectID] = bind.globalName
@@ -375,6 +388,12 @@ func (r *fakeWaylandProtocolResponder) recordRequest(request string) {
 	r.requests = append(r.requests, request)
 }
 
+func (r *fakeWaylandProtocolResponder) recordBind(bind fakeWaylandBind) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.binds = append(r.binds, bind)
+}
+
 func (r *fakeWaylandProtocolResponder) sendRegistryGlobals(conn net.Conn, registryID uint32) {
 	globals := []WaylandGlobal{
 		{Name: 1, Interface: waylandInterfaceCompositor, Version: 6},
@@ -445,18 +464,26 @@ func (r *fakeWaylandProtocolResponder) sendXDGOutput(conn net.Conn, objectID uin
 }
 
 type fakeWaylandBind struct {
-	globalName uint32
-	iface      string
-	version    uint32
-	objectID   uint32
+	globalName   uint32
+	iface        string
+	ifaceWireLen int
+	version      uint32
+	objectID     uint32
 }
 
 func parseFakeWaylandBind(payload []byte) fakeWaylandBind {
 	globalName := fakeWaylandUint32(payload[0:4])
+	ifaceWireLen := int(fakeWaylandUint32(payload[4:8]))
 	iface, next := parseFakeWaylandString(payload[4:])
 	version := fakeWaylandUint32(payload[4+next : 8+next])
 	objectID := fakeWaylandUint32(payload[8+next : 12+next])
-	return fakeWaylandBind{globalName: globalName, iface: iface, version: version, objectID: objectID}
+	return fakeWaylandBind{
+		globalName:   globalName,
+		iface:        iface,
+		ifaceWireLen: ifaceWireLen,
+		version:      version,
+		objectID:     objectID,
+	}
 }
 
 func readFakeWaylandRequest(r io.Reader) (fakeWaylandRequest, error) {

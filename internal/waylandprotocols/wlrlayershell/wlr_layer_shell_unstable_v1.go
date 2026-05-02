@@ -91,7 +91,8 @@ func NewLayerShell(ctx *client.Context) *LayerShell {
 func (i *LayerShell) GetLayerSurface(surface *client.Surface, output *client.Output, layer uint32, namespace string) (*LayerSurface, error) {
 	id := NewLayerSurface(i.Context())
 	const opcode = 0
-	namespaceLen := client.PaddedLen(len(namespace) + 1)
+	namespaceWireLen := len(namespace) + 1
+	namespaceLen := client.PaddedLen(namespaceWireLen)
 	_reqBufLen := 8 + 4 + 4 + 4 + 4 + (4 + namespaceLen)
 	_reqBuf := make([]byte, _reqBufLen)
 	l := 0
@@ -112,8 +113,10 @@ func (i *LayerShell) GetLayerSurface(surface *client.Surface, output *client.Out
 	}
 	client.PutUint32(_reqBuf[l:l+4], uint32(layer))
 	l += 4
-	client.PutString(_reqBuf[l:l+(4+namespaceLen)], namespace, namespaceLen)
-	l += (4 + namespaceLen)
+	client.PutUint32(_reqBuf[l:l+4], uint32(namespaceWireLen))
+	l += 4
+	copy(_reqBuf[l:l+len(namespace)], namespace)
+	l += namespaceLen
 	err := i.Context().WriteMsg(_reqBuf, nil)
 	return id, err
 }

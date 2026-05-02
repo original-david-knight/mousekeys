@@ -141,6 +141,9 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 	if err := surface.GrabKeyboard(ctx); err != nil {
 		return err
 	}
+	if err := d.startKeyboardInputLocked(ctx); err != nil {
+		return err
+	}
 
 	appConfig := DefaultConfig()
 	if d.deps.Config != nil {
@@ -160,9 +163,6 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 		}
 	}
 	if err := surface.Render(ctx, buffer); err != nil {
-		return err
-	}
-	if err := d.startKeyboardInputLocked(ctx); err != nil {
 		return err
 	}
 
@@ -299,11 +299,25 @@ func (d *DaemonController) consumeKeyboardTokens(ctx context.Context, tokens <-c
 			if !ok {
 				return
 			}
+			d.deps.Trace.Record("keyboard", "token", map[string]any{
+				"kind":     string(token.Kind),
+				"letter":   string([]byte{token.Letter}),
+				"keysym":   string(token.KeySym),
+				"commands": keyboardCommandsForTrace(token.Commands),
+			})
 			if err := d.HandleKeyboardToken(ctx, token); err != nil {
 				d.deps.Trace.Record("error", "keyboard_token_failed", map[string]any{"error": err.Error()})
 			}
 		}
 	}
+}
+
+func keyboardCommandsForTrace(commands []KeyboardCommand) []string {
+	out := make([]string, 0, len(commands))
+	for _, command := range commands {
+		out = append(out, string(command))
+	}
+	return out
 }
 
 func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token KeyboardToken) error {

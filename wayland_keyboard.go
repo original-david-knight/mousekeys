@@ -13,6 +13,7 @@ import (
 
 type WaylandKeyboardRawEventSource struct {
 	client *WaylandClient
+	trace  TraceRecorder
 
 	mu       sync.Mutex
 	sendMu   sync.Mutex
@@ -26,8 +27,19 @@ type WaylandKeyboardRawEventSource struct {
 	closeErr  error
 }
 
-func NewWaylandKeyboardRawEventSource(client *WaylandClient) *WaylandKeyboardRawEventSource {
-	return &WaylandKeyboardRawEventSource{client: client}
+func NewWaylandKeyboardRawEventSource(client *WaylandClient, traces ...TraceRecorder) *WaylandKeyboardRawEventSource {
+	trace := TraceRecorder(noopTraceRecorder{})
+	if len(traces) > 0 && traces[0] != nil {
+		trace = traces[0]
+	}
+	return &WaylandKeyboardRawEventSource{client: client, trace: trace}
+}
+
+func (s *WaylandKeyboardRawEventSource) recordTrace(action string, fields map[string]any) {
+	if s == nil || s.trace == nil {
+		return
+	}
+	s.trace.Record("keyboard", action, fields)
 }
 
 func (s *WaylandKeyboardRawEventSource) RawEvents(ctx context.Context) (<-chan RawKeyboardEvent, error) {
@@ -52,28 +64,12 @@ func (s *WaylandKeyboardRawEventSource) RawEvents(ctx context.Context) (<-chan R
 	s.events = make(chan RawKeyboardEvent, 64)
 	s.done = make(chan struct{})
 	events := s.events
+	done := s.done
 	s.mu.Unlock()
 
 	seat := s.client.Seat()
 	if seat == nil {
-		s.mu.Lock()
-		s.started = false
-		done := s.done
-		shouldCloseEvents := false
-		if s.events == events {
-			s.done = nil
-			s.events = nil
-			shouldCloseEvents = true
-		}
-		s.mu.Unlock()
-		if done != nil {
-			close(done)
-		}
-		if shouldCloseEvents {
-			s.sendMu.Lock()
-			close(events)
-			s.sendMu.Unlock()
-		}
+		_ = s.stopSession(events, done, nil)
 		return nil, fmt.Errorf("Wayland seat is not bound")
 	}
 
@@ -84,27 +80,10 @@ func (s *WaylandKeyboardRawEventSource) RawEvents(ctx context.Context) (<-chan R
 		if err != nil {
 			return fmt.Errorf("request wl_keyboard from seat: %w", err)
 		}
-		s.installHandlers(keyboard)
+		s.installHandlers(keyboard, events, done)
 		return nil
 	}); err != nil {
-		s.mu.Lock()
-		s.started = false
-		done := s.done
-		shouldCloseEvents := false
-		if s.events == events {
-			s.done = nil
-			s.events = nil
-			shouldCloseEvents = true
-		}
-		s.mu.Unlock()
-		if done != nil {
-			close(done)
-		}
-		if shouldCloseEvents {
-			s.sendMu.Lock()
-			close(events)
-			s.sendMu.Unlock()
-		}
+		_ = s.stopSession(events, done, keyboard)
 		return nil, err
 	}
 
@@ -120,11 +99,12 @@ func (s *WaylandKeyboardRawEventSource) RawEvents(ctx context.Context) (<-chan R
 	}
 	s.keyboard = keyboard
 	s.mu.Unlock()
+	s.recordTrace("raw_session_started", nil)
 	s.client.StartDispatchLoop(ctx)
-	if done := ctx.Done(); done != nil {
+	if ctxDone := ctx.Done(); ctxDone != nil {
 		go func() {
-			<-done
-			_ = s.Close()
+			<-ctxDone
+			_ = s.stopSession(events, done, keyboard)
 		}()
 	}
 	return events, nil
@@ -143,6 +123,7 @@ func (s *WaylandKeyboardRawEventSource) Close() error {
 		s.keyboard = nil
 		s.events = nil
 		s.done = nil
+		s.started = false
 		s.mu.Unlock()
 
 		if done != nil {
@@ -162,14 +143,54 @@ func (s *WaylandKeyboardRawEventSource) Close() error {
 	return s.closeErr
 }
 
-func (s *WaylandKeyboardRawEventSource) installHandlers(keyboard *wlclient.Keyboard) {
+func (s *WaylandKeyboardRawEventSource) stopSession(events chan RawKeyboardEvent, done chan struct{}, keyboard *wlclient.Keyboard) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	if s.events != events || s.done != done {
+		s.mu.Unlock()
+		return nil
+	}
+	if keyboard == nil {
+		keyboard = s.keyboard
+	}
+	s.keyboard = nil
+	s.events = nil
+	s.done = nil
+	s.started = false
+	s.mu.Unlock()
+
+	if done != nil {
+		close(done)
+	}
+	s.recordTrace("raw_session_stopped", nil)
+
+	var err error
+	if keyboard != nil && s.client != nil {
+		err = s.client.withProtocolLock(func() error {
+			return keyboard.Release()
+		})
+	}
+	if events != nil {
+		s.sendMu.Lock()
+		close(events)
+		s.sendMu.Unlock()
+	}
+	return err
+}
+
+func (s *WaylandKeyboardRawEventSource) installHandlers(keyboard *wlclient.Keyboard, events chan RawKeyboardEvent, done chan struct{}) {
 	keyboard.SetKeymapHandler(func(event wlclient.KeyboardKeymapEvent) {
 		keymap, err := readWaylandKeymap(event.Fd, event.Size)
 		if err != nil {
-			s.emit(RawKeyboardEvent{Kind: RawKeyboardEventError, Err: err})
+			s.recordTrace("raw_error", map[string]any{"error": err.Error()})
+			s.emit(events, done, RawKeyboardEvent{Kind: RawKeyboardEventError, Err: err})
 			return
 		}
-		s.emit(RawKeyboardEvent{
+		s.recordTrace("raw_keymap", map[string]any{"format": event.Format, "size": event.Size})
+		s.emit(events, done, RawKeyboardEvent{
 			Kind:         RawKeyboardEventKeymap,
 			KeymapFormat: event.Format,
 			Keymap:       keymap,
@@ -178,25 +199,38 @@ func (s *WaylandKeyboardRawEventSource) installHandlers(keyboard *wlclient.Keybo
 	keyboard.SetEnterHandler(func(event wlclient.KeyboardEnterEvent) {
 		keys, err := parseWaylandKeyboardEnterKeys(event.Keys)
 		if err != nil {
-			s.emit(RawKeyboardEvent{Kind: RawKeyboardEventError, Err: err})
+			s.recordTrace("raw_error", map[string]any{"error": err.Error()})
+			s.emit(events, done, RawKeyboardEvent{Kind: RawKeyboardEventError, Err: err})
 			return
 		}
-		s.emit(RawKeyboardEvent{
+		s.recordTrace("raw_enter", map[string]any{"pressed_key_count": len(keys)})
+		s.emit(events, done, RawKeyboardEvent{
 			Kind:        RawKeyboardEventEnter,
 			PressedKeys: keys,
 			Time:        time.Now(),
 		})
 	})
 	keyboard.SetKeyHandler(func(event wlclient.KeyboardKeyEvent) {
-		s.emit(RawKeyboardEvent{
+		pressed := event.State == uint32(wlclient.KeyboardKeyStatePressed)
+		s.recordTrace("raw_key", map[string]any{
+			"keycode": event.Key,
+			"pressed": pressed,
+		})
+		s.emit(events, done, RawKeyboardEvent{
 			Kind:    RawKeyboardEventKey,
 			Keycode: event.Key,
-			Pressed: event.State == uint32(wlclient.KeyboardKeyStatePressed),
+			Pressed: pressed,
 			Time:    waylandKeyboardTime(event.Time),
 		})
 	})
 	keyboard.SetModifiersHandler(func(event wlclient.KeyboardModifiersEvent) {
-		s.emit(RawKeyboardEvent{
+		s.recordTrace("raw_modifiers", map[string]any{
+			"depressed": event.ModsDepressed,
+			"latched":   event.ModsLatched,
+			"locked":    event.ModsLocked,
+			"group":     event.Group,
+		})
+		s.emit(events, done, RawKeyboardEvent{
 			Kind:          RawKeyboardEventModifiers,
 			ModsDepressed: event.ModsDepressed,
 			ModsLatched:   event.ModsLatched,
@@ -205,10 +239,12 @@ func (s *WaylandKeyboardRawEventSource) installHandlers(keyboard *wlclient.Keybo
 		})
 	})
 	keyboard.SetLeaveHandler(func(wlclient.KeyboardLeaveEvent) {
-		s.emit(RawKeyboardEvent{Kind: RawKeyboardEventLeave, Time: time.Now()})
+		s.recordTrace("raw_leave", nil)
+		s.emit(events, done, RawKeyboardEvent{Kind: RawKeyboardEventLeave, Time: time.Now()})
 	})
 	keyboard.SetRepeatInfoHandler(func(event wlclient.KeyboardRepeatInfoEvent) {
-		s.emit(RawKeyboardEvent{
+		s.recordTrace("raw_repeat_info", map[string]any{"rate": event.Rate, "delay_ms": event.Delay})
+		s.emit(events, done, RawKeyboardEvent{
 			Kind:          RawKeyboardEventRepeatInfo,
 			RepeatRate:    event.Rate,
 			RepeatDelayMS: event.Delay,
@@ -216,16 +252,14 @@ func (s *WaylandKeyboardRawEventSource) installHandlers(keyboard *wlclient.Keybo
 	})
 }
 
-func (s *WaylandKeyboardRawEventSource) emit(event RawKeyboardEvent) {
+func (s *WaylandKeyboardRawEventSource) emit(events chan RawKeyboardEvent, done chan struct{}, event RawKeyboardEvent) {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 
 	s.mu.Lock()
-	events := s.events
-	done := s.done
-	closed := s.closed
+	active := s.events == events && s.done == done && !s.closed
 	s.mu.Unlock()
-	if events == nil || done == nil || closed {
+	if events == nil || done == nil || !active {
 		return
 	}
 	select {
@@ -248,7 +282,8 @@ func readWaylandKeymap(fd int, size uint32) ([]byte, error) {
 		return nil, fmt.Errorf("wl_keyboard keymap size is zero")
 	}
 	keymap := make([]byte, int(size))
-	n, err := io.ReadFull(file, keymap)
+	reader := io.NewSectionReader(file, 0, int64(size))
+	n, err := io.ReadFull(reader, keymap)
 	if err != nil {
 		return nil, fmt.Errorf("read wl_keyboard keymap: %w", err)
 	}

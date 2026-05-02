@@ -273,10 +273,22 @@ func letterFromKeysymName(name string) (byte, bool) {
 
 type xkbKeyboardEventSource struct {
 	source RawKeyboardEventSource
+	trace  TraceRecorder
 }
 
-func NewXKBKeyboardEventSource(source RawKeyboardEventSource) KeyboardEventSource {
-	return &xkbKeyboardEventSource{source: source}
+func NewXKBKeyboardEventSource(source RawKeyboardEventSource, traces ...TraceRecorder) KeyboardEventSource {
+	trace := TraceRecorder(noopTraceRecorder{})
+	if len(traces) > 0 && traces[0] != nil {
+		trace = traces[0]
+	}
+	return &xkbKeyboardEventSource{source: source, trace: trace}
+}
+
+func (s *xkbKeyboardEventSource) recordTrace(action string, fields map[string]any) {
+	if s == nil || s.trace == nil {
+		return
+	}
+	s.trace.Record("keyboard", action, fields)
 }
 
 func (s *xkbKeyboardEventSource) Events(ctx context.Context) (<-chan KeyboardEvent, error) {
@@ -324,11 +336,13 @@ func (s *xkbKeyboardEventSource) translateRawEvents(ctx context.Context, rawEven
 				}
 				next, err := newKeyboardKeymapState(raw.KeymapFormat, raw.Keymap)
 				if err != nil {
+					s.recordTrace("xkb_error", map[string]any{"error": err.Error()})
 					s.emit(ctx, events, KeyboardEvent{Kind: KeyboardEventError, Time: raw.Time, Err: err})
 					continue
 				}
 				keymap = next
 				clear(pressed)
+				s.recordTrace("xkb_keymap_ready", nil)
 			case RawKeyboardEventEnter:
 				clear(pressed)
 				if keymap != nil {
@@ -338,6 +352,7 @@ func (s *xkbKeyboardEventSource) translateRawEvents(ctx context.Context, rawEven
 						keymap.UpdateKey(keycode, true)
 					}
 				}
+				s.recordTrace("xkb_enter", map[string]any{"pressed_key_count": len(raw.PressedKeys)})
 				s.emit(ctx, events, KeyboardEvent{Kind: KeyboardEventEnter, Time: raw.Time})
 			case RawKeyboardEventModifiers:
 				if keymap != nil {
@@ -346,6 +361,18 @@ func (s *xkbKeyboardEventSource) translateRawEvents(ctx context.Context, rawEven
 			case RawKeyboardEventKey:
 				event, ok := translateRawKeyEvent(keymap, pressed, raw)
 				if ok {
+					fields := map[string]any{
+						"keycode": event.Keycode,
+						"pressed": event.Pressed,
+						"repeat":  event.Repeat,
+					}
+					if event.Key != "" {
+						fields["key"] = event.Key
+					}
+					if event.Err != nil {
+						fields["error"] = event.Err.Error()
+					}
+					s.recordTrace("xkb_key", fields)
 					s.emit(ctx, events, event)
 				}
 			case RawKeyboardEventLeave:
@@ -353,6 +380,7 @@ func (s *xkbKeyboardEventSource) translateRawEvents(ctx context.Context, rawEven
 				if keymap != nil {
 					keymap.Reset()
 				}
+				s.recordTrace("xkb_leave", nil)
 				s.emit(ctx, events, KeyboardEvent{Kind: KeyboardEventLeave, Time: raw.Time})
 			case RawKeyboardEventDestroy:
 				clear(pressed)
@@ -361,8 +389,12 @@ func (s *xkbKeyboardEventSource) translateRawEvents(ctx context.Context, rawEven
 					keymap.Close()
 					keymap = nil
 				}
+				s.recordTrace("xkb_destroy", nil)
 				s.emit(ctx, events, KeyboardEvent{Kind: KeyboardEventDestroy, Time: raw.Time})
 			case RawKeyboardEventError:
+				if raw.Err != nil {
+					s.recordTrace("raw_event_error", map[string]any{"error": raw.Err.Error()})
+				}
 				s.emit(ctx, events, KeyboardEvent{Kind: KeyboardEventError, Time: raw.Time, Err: raw.Err})
 			case RawKeyboardEventRepeatInfo:
 			}

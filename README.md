@@ -29,6 +29,12 @@ Legacy hyprlang config:
 bind = SUPER, period, exec, mousekeys show
 ```
 
+Omarchy users can add a described binding to `~/.config/hypr/bindings.conf`:
+
+```ini
+bindd = SUPER, period, Mouse Keys, exec, mousekeys show
+```
+
 ## systemd User Service
 
 The packaged `mousekeys.service` file is a systemd user unit, not a system unit. It starts the persistent daemon with `/usr/bin/env mousekeys daemon`, restarts on failure, and logs to the user journal:
@@ -46,6 +52,8 @@ systemctl --user daemon-reload
 ```
 
 The service must run inside a Hyprland Wayland session. `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, and `HYPRLAND_INSTANCE_SIGNATURE` must be available in the systemd user manager environment before the service starts. UWSM is the recommended setup because it imports the Hyprland session environment into the systemd user manager. The shipped unit also has an `ExecStartPre` check that fails fast when those variables are missing.
+
+Omarchy starts Hyprland through UWSM by default, so the environment should normally already be present. If the unit fails its preflight check, run the import command below from inside the Hyprland session and restart the service.
 
 If you are not using UWSM, use an equivalent import before starting the unit, for example from inside the Hyprland session:
 

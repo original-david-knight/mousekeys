@@ -30,9 +30,14 @@ func TestDaemonShowCreatesExclusiveOverlayOnFocusedWaylandOutput(t *testing.T) {
 		Monitor{Name: "DP-1", X: 0, Y: 0, Width: 1920, Height: 1080, Scale: 1},
 		focusedWaylandOutput,
 	)
+	eventLog := &acceptanceEventLog{}
+	wayland.observer = eventLog
+	keyboardSource := newFakeKeyboardEventSource(1)
+	keyboardSource.observer = eventLog
 	controller := NewDaemonController(DaemonDeps{
 		MonitorLookup: &fakeFocusedMonitorLookup{monitor: focusedFromHyprland},
 		Overlay:       wayland,
+		Keyboard:      keyboardSource,
 	})
 
 	if err := controller.Show(ctx); err != nil {
@@ -56,6 +61,7 @@ func TestDaemonShowCreatesExclusiveOverlayOnFocusedWaylandOutput(t *testing.T) {
 	if render.Width != focusedWaylandOutput.Width || render.Height != focusedWaylandOutput.Height || render.BufferHash == "" {
 		t.Fatalf("render = %+v, want focused output-sized buffer with hash", render)
 	}
+	assertEventBefore(t, eventLog.Events(), eventPattern{Source: "keyboard", Action: "events_start"}, eventPattern{Source: "wayland", Action: "render"})
 
 	if err := controller.Hide(ctx); err != nil {
 		t.Fatalf("hide overlay: %v", err)
@@ -228,6 +234,29 @@ func waitForControllerState(t *testing.T, controller *DaemonController, want Dae
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("controller state = %q, want %q", controller.State(), want)
+}
+
+func assertEventBefore(t *testing.T, events []acceptanceEvent, before eventPattern, after eventPattern) {
+	t.Helper()
+	beforeIndex := -1
+	afterIndex := -1
+	for i, event := range events {
+		if beforeIndex < 0 && before.Matches(event) {
+			beforeIndex = i
+		}
+		if afterIndex < 0 && after.Matches(event) {
+			afterIndex = i
+		}
+	}
+	if beforeIndex < 0 {
+		t.Fatalf("event pattern %+v not found in events: %+v", before, events)
+	}
+	if afterIndex < 0 {
+		t.Fatalf("event pattern %+v not found in events: %+v", after, events)
+	}
+	if beforeIndex >= afterIndex {
+		t.Fatalf("event pattern %+v index %d should come before %+v index %d; events=%+v", before, beforeIndex, after, afterIndex, events)
+	}
 }
 
 func waitForClosedChannel(t *testing.T, closed <-chan struct{}) {

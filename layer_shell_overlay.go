@@ -104,7 +104,7 @@ func (b *LayerShellOverlayBackend) CreateSurface(ctx context.Context, monitor Mo
 		s.layerSurface, err = layerShell.GetLayerSurface(
 			s.wlSurface,
 			output,
-			uint32(wlrlayershell.LayerShellLayerTop),
+			uint32(wlrlayershell.LayerShellLayerOverlay),
 			layerShellNamespace,
 		)
 		if err != nil {
@@ -913,6 +913,9 @@ func (c *WaylandClient) dispatchLoop(ctx context.Context) {
 
 		if err != nil {
 			if isTimeoutError(err) {
+				continue
+			}
+			if isUnknownWaylandSenderError(err) {
 				continue
 			}
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {

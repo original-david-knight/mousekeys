@@ -33,10 +33,11 @@ func NewHyprlandBackedStubDaemonController(trace TraceRecorder, config Config, a
 }
 
 func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, config Config, atlas *FontAtlas, wayland *WaylandClient) *DaemonController {
+	rawKeyboard := NewWaylandKeyboardRawEventSource(wayland, trace)
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: NewHyprlandIPCClientFromEnv(),
 		Overlay:       NewLayerShellOverlayBackend(wayland),
-		Keyboard:      NewXKBKeyboardEventSource(NewWaylandKeyboardRawEventSource(wayland)),
+		Keyboard:      NewXKBKeyboardEventSource(rawKeyboard, trace),
 		Config:        &config,
 		FontAtlas:     atlas,
 		Pointer:       NewWaylandVirtualPointerSynthesizer(wayland, systemClock{}),

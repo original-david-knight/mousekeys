@@ -590,6 +590,7 @@ func newFakeKeyboardEventSource(buffer int) *fakeKeyboardEventSource {
 }
 
 func (f *fakeKeyboardEventSource) Events(context.Context) (<-chan KeyboardEvent, error) {
+	observeFakeEvent(f.observer, "keyboard", "events_start", nil)
 	return f.ch, nil
 }
 

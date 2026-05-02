@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -268,19 +269,56 @@ func (c *WaylandClient) bindPlan(plan waylandBindingPlan) error {
 	return nil
 }
 
+func (c *WaylandClient) bindRegistryGlobal(binding waylandGlobalBinding, iface string, id wlclient.Proxy) error {
+	if c == nil || c.registry == nil {
+		return fmt.Errorf("Wayland registry is not initialized")
+	}
+	if !binding.Valid() {
+		return fmt.Errorf("invalid binding for %s", iface)
+	}
+	if iface == "" {
+		return fmt.Errorf("Wayland interface name is required")
+	}
+	if id == nil {
+		return fmt.Errorf("Wayland proxy for %s is nil", iface)
+	}
+
+	ifaceWireLen := len(iface) + 1
+	ifacePaddedLen := wlclient.PaddedLen(ifaceWireLen)
+	reqLen := 8 + 4 + (4 + ifacePaddedLen) + 4 + 4
+	req := make([]byte, reqLen)
+
+	l := 0
+	wlclient.PutUint32(req[l:l+4], c.registry.ID())
+	l += 4
+	wlclient.PutUint32(req[l:l+4], uint32(reqLen<<16))
+	l += 4
+	wlclient.PutUint32(req[l:l+4], binding.Global.Name)
+	l += 4
+	wlclient.PutUint32(req[l:l+4], uint32(ifaceWireLen))
+	l += 4
+	copy(req[l:l+len(iface)], iface)
+	l += ifacePaddedLen
+	wlclient.PutUint32(req[l:l+4], binding.Version)
+	l += 4
+	wlclient.PutUint32(req[l:l+4], id.ID())
+
+	return c.registry.Context().WriteMsg(req, nil)
+}
+
 func (c *WaylandClient) bindCore(plan waylandBindingPlan) error {
-	ctx := c.display.Context()
-	compositor := wlclient.NewCompositor(ctx)
-	if err := c.registry.Bind(plan.Compositor.Global.Name, waylandInterfaceCompositor, plan.Compositor.Version, compositor); err != nil {
+	protocolCtx := c.display.Context()
+	compositor := wlclient.NewCompositor(protocolCtx)
+	if err := c.bindRegistryGlobal(plan.Compositor, waylandInterfaceCompositor, compositor); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceCompositor, err)
 	}
 
-	shm := wlclient.NewShm(ctx)
-	if err := c.registry.Bind(plan.Shm.Global.Name, waylandInterfaceShm, plan.Shm.Version, shm); err != nil {
+	shm := wlclient.NewShm(protocolCtx)
+	if err := c.bindRegistryGlobal(plan.Shm, waylandInterfaceShm, shm); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceShm, err)
 	}
 
-	seat := wlclient.NewSeat(ctx)
+	seat := wlclient.NewSeat(protocolCtx)
 	seat.SetCapabilitiesHandler(func(event wlclient.SeatCapabilitiesEvent) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -291,17 +329,17 @@ func (c *WaylandClient) bindCore(plan waylandBindingPlan) error {
 		defer c.mu.Unlock()
 		c.seatName = event.Name
 	})
-	if err := c.registry.Bind(plan.Seat.Global.Name, waylandInterfaceSeat, plan.Seat.Version, seat); err != nil {
+	if err := c.bindRegistryGlobal(plan.Seat, waylandInterfaceSeat, seat); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceSeat, err)
 	}
 
-	layerShell := wlrlayershell.NewLayerShell(ctx)
-	if err := c.registry.Bind(plan.LayerShell.Global.Name, waylandInterfaceLayerShell, plan.LayerShell.Version, layerShell); err != nil {
+	layerShell := wlrlayershell.NewLayerShell(protocolCtx)
+	if err := c.bindRegistryGlobal(plan.LayerShell, waylandInterfaceLayerShell, layerShell); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceLayerShell, err)
 	}
 
-	virtualPointerManager := wlrvirtualpointer.NewVirtualPointerManager(ctx)
-	if err := c.registry.Bind(plan.VirtualPointerManager.Global.Name, waylandInterfaceVirtualPointerManager, plan.VirtualPointerManager.Version, virtualPointerManager); err != nil {
+	virtualPointerManager := wlrvirtualpointer.NewVirtualPointerManager(protocolCtx)
+	if err := c.bindRegistryGlobal(plan.VirtualPointerManager, waylandInterfaceVirtualPointerManager, virtualPointerManager); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceVirtualPointerManager, err)
 	}
 
@@ -317,10 +355,10 @@ func (c *WaylandClient) bindCore(plan waylandBindingPlan) error {
 }
 
 func (c *WaylandClient) bindOutputs(outputs []waylandGlobalBinding) error {
-	ctx := c.display.Context()
+	protocolCtx := c.display.Context()
 	for _, binding := range outputs {
 		state := newWaylandOutputState(binding)
-		output := wlclient.NewOutput(ctx)
+		output := wlclient.NewOutput(protocolCtx)
 		output.SetGeometryHandler(func(event wlclient.OutputGeometryEvent) {
 			c.mu.Lock()
 			state.applyWLGeometry(int(event.X), int(event.Y), int(event.Transform))
@@ -349,7 +387,7 @@ func (c *WaylandClient) bindOutputs(outputs []waylandGlobalBinding) error {
 			c.mu.Unlock()
 			notifyWaylandOutputListeners(listeners)
 		})
-		if err := c.registry.Bind(binding.Global.Name, waylandInterfaceOutput, binding.Version, output); err != nil {
+		if err := c.bindRegistryGlobal(binding, waylandInterfaceOutput, output); err != nil {
 			return fmt.Errorf("bind %s global %d: %w", waylandInterfaceOutput, binding.Global.Name, err)
 		}
 		c.mu.Lock()
@@ -361,9 +399,9 @@ func (c *WaylandClient) bindOutputs(outputs []waylandGlobalBinding) error {
 }
 
 func (c *WaylandClient) bindXDGOutputs(binding waylandGlobalBinding) error {
-	ctx := c.display.Context()
-	c.xdgOutputManager = xdgoutput.NewOutputManager(ctx)
-	if err := c.registry.Bind(binding.Global.Name, waylandInterfaceXDGOutputManager, binding.Version, c.xdgOutputManager); err != nil {
+	protocolCtx := c.display.Context()
+	c.xdgOutputManager = xdgoutput.NewOutputManager(protocolCtx)
+	if err := c.bindRegistryGlobal(binding, waylandInterfaceXDGOutputManager, c.xdgOutputManager); err != nil {
 		return fmt.Errorf("bind %s: %w", waylandInterfaceXDGOutputManager, err)
 	}
 
@@ -444,6 +482,9 @@ func (c *WaylandClient) roundTrip(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return fmt.Errorf("Wayland roundtrip canceled: %w", ctx.Err())
 				}
+				continue
+			}
+			if isUnknownWaylandSenderError(err) {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -533,4 +574,8 @@ func nextWaylandDispatchDeadline(ctx context.Context) time.Time {
 func isTimeoutError(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func isUnknownWaylandSenderError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ctx.Dispatch: unable find sender")
 }
