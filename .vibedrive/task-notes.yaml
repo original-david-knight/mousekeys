@@ -35,3 +35,6 @@ tasks:
     - id: coordinate-entry-fsm
       status: done
       notes: Added a pure main-coordinate FSM plus daemon keyboard wiring. The existing renderer already accepted HUD text, so this phase extended it with selected-column focus/dimming and re-renders from controller state; main-coordinate-selected is exposed via controller callback and trace for the later sub-grid task.
+    - id: subgrid-render-and-input
+      status: done
+      notes: Implemented sub-grid as a transparent full-monitor overlay mode using exact logical cell counts from grid.subgrid_pixel_size. Pointer recorder and renderer snapshot tests now cover center move, visible placement, out-of-range letters, XY refinement, and X-only Tab refinement; click auto-commit remains part of the later commit/click phase.

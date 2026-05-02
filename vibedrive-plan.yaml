@@ -517,7 +517,7 @@ tasks:
         - Input modes: two letters for full XY refinement, OR just the
           horizontal letter + Tab to commit refinement on X only (Y stays at
           the main cell's vertical center).
-      status: todo
+      status: done
       workflow: implement
       deps:
         - coordinate-entry-fsm
