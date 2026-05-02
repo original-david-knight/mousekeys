@@ -26,7 +26,7 @@ func TestHarnessFakesAndTraceStubFlow(t *testing.T) {
 	var trace bytes.Buffer
 	wayland := newFakeWaylandBackend(fakeMonitorFixtures()...)
 	renderer := &fakeRendererSink{}
-	pointer := &virtualPointerRecorder{}
+	pointer := newVirtualPointerRecorder(clock)
 	keyboard := newFakeKeyboardEventSource(3)
 	controller := NewDaemonController(DaemonDeps{
 		MonitorLookup: &fakeFocusedMonitorLookup{monitor: focused},
@@ -79,15 +79,12 @@ func TestHarnessFakesAndTraceStubFlow(t *testing.T) {
 	if err := controller.ClickAt(ctx, point, PointerButtonLeft, 2, groupID); err != nil {
 		t.Fatalf("double click through pointer recorder: %v", err)
 	}
-	if got := pointer.ClickCount(groupID, PointerButtonLeft); got != 2 {
+	if got := pointer.ClickCount("", PointerButtonLeft); got != 2 {
 		t.Fatalf("left click count for group %q = %d, want 2", groupID, got)
 	}
 	for _, event := range pointer.Events() {
 		if event.X != point.X || event.Y != point.Y || event.OutputName != focused.Name {
 			t.Fatalf("pointer event has wrong target: %+v point=%+v output=%s", event, point, focused.Name)
-		}
-		if event.GroupID != groupID {
-			t.Fatalf("pointer event has wrong group: %+v", event)
 		}
 		if !event.Time.Equal(clock.Now()) {
 			t.Fatalf("pointer event timestamp = %s, want %s", event.Time, clock.Now())

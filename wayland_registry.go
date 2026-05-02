@@ -65,7 +65,7 @@ func buildWaylandBindingPlan(globals []WaylandGlobal) (waylandBindingPlan, error
 	addRequired(&plan.Shm, waylandInterfaceShm, 1, 1)
 	addRequired(&plan.Seat, waylandInterfaceSeat, 1, 9)
 	addRequired(&plan.LayerShell, waylandInterfaceLayerShell, 1, 4)
-	addRequired(&plan.VirtualPointerManager, waylandInterfaceVirtualPointerManager, 2, 2)
+	addRequired(&plan.VirtualPointerManager, waylandInterfaceVirtualPointerManager, 1, 2)
 
 	xdgOutputManager, _, _ := chooseWaylandGlobal(globals, waylandInterfaceXDGOutputManager, 1, 3)
 	plan.XDGOutputManager = xdgOutputManager

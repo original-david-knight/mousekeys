@@ -94,12 +94,13 @@ func TestOpenWaylandClientReportsSeatCapabilityFailureFromFakeProtocol(t *testin
 }
 
 type fakeWaylandProtocolResponder struct {
-	t                *testing.T
-	socketPath       string
-	listener         net.Listener
-	seatName         string
-	seatCapabilities uint32
-	outputs          []fakeWaylandProtocolOutput
+	t                            *testing.T
+	socketPath                   string
+	listener                     net.Listener
+	seatName                     string
+	seatCapabilities             uint32
+	virtualPointerManagerVersion uint32
+	outputs                      []fakeWaylandProtocolOutput
 
 	mu       sync.Mutex
 	requests []string
@@ -129,9 +130,10 @@ type fakeWaylandRequest struct {
 func newFakeWaylandProtocolResponder(t *testing.T) *fakeWaylandProtocolResponder {
 	t.Helper()
 	return &fakeWaylandProtocolResponder{
-		t:          t,
-		socketPath: filepath.Join(t.TempDir(), "wayland-test"),
-		seatName:   "seat0",
+		t:                            t,
+		socketPath:                   filepath.Join(t.TempDir(), "wayland-test"),
+		seatName:                     "seat0",
+		virtualPointerManagerVersion: 2,
 		seatCapabilities: uint32(
 			wlclient.SeatCapabilityKeyboard |
 				wlclient.SeatCapabilityPointer,
@@ -194,6 +196,19 @@ func (r *fakeWaylandProtocolResponder) Requests() []string {
 	return append([]string(nil), r.requests...)
 }
 
+func (r *fakeWaylandProtocolResponder) outputNameForObject(outputID uint32, outputGlobalByObject map[uint32]uint32) string {
+	globalName := outputGlobalByObject[outputID]
+	for _, output := range r.outputs {
+		if output.globalName == globalName {
+			if output.xdgName != "" {
+				return output.xdgName
+			}
+			return output.wlName
+		}
+	}
+	return ""
+}
+
 func (r *fakeWaylandProtocolResponder) acceptLoop() {
 	conn, err := r.listener.Accept()
 	if err != nil {
@@ -212,6 +227,7 @@ func (r *fakeWaylandProtocolResponder) handle(conn net.Conn) {
 	var xdgOutputManagerID uint32
 	xdgOutputByOutputObject := map[uint32]uint32{}
 	objectKindByID := map[uint32]string{}
+	virtualPointerOutputByID := map[uint32]string{}
 	layerSurfaceBySurface := map[uint32]uint32{}
 	layerSurfaceSize := map[uint32][2]uint32{}
 	layerSurfaceConfigured := map[uint32]bool{}
@@ -251,6 +267,34 @@ func (r *fakeWaylandProtocolResponder) handle(conn net.Conn) {
 			outputID := fakeWaylandUint32(request.payload[4:8])
 			xdgOutputByOutputObject[outputID] = xdgOutputID
 			objectKindByID[xdgOutputID] = "zxdg_output_v1"
+		case objectKindByID[request.sender] == waylandInterfaceVirtualPointerManager && request.opcode == 0:
+			pointerID := fakeWaylandUint32(request.payload[4:8])
+			objectKindByID[pointerID] = "zwlr_virtual_pointer_v1"
+			virtualPointerOutputByID[pointerID] = ""
+			r.recordRequest("zwlr_virtual_pointer_manager_v1.create_virtual_pointer")
+		case objectKindByID[request.sender] == waylandInterfaceVirtualPointerManager && request.opcode == 2:
+			outputID := fakeWaylandUint32(request.payload[4:8])
+			pointerID := fakeWaylandUint32(request.payload[8:12])
+			outputName := r.outputNameForObject(outputID, outputGlobalByObject)
+			objectKindByID[pointerID] = "zwlr_virtual_pointer_v1"
+			virtualPointerOutputByID[pointerID] = outputName
+			r.recordRequest(fmt.Sprintf("zwlr_virtual_pointer_manager_v1.create_virtual_pointer_with_output:output=%s", outputName))
+		case objectKindByID[request.sender] == "zwlr_virtual_pointer_v1" && request.opcode == 1:
+			x := fakeWaylandUint32(request.payload[4:8])
+			y := fakeWaylandUint32(request.payload[8:12])
+			xExtent := fakeWaylandUint32(request.payload[12:16])
+			yExtent := fakeWaylandUint32(request.payload[16:20])
+			r.recordRequest(fmt.Sprintf("zwlr_virtual_pointer_v1.motion_absolute:output=%s,x=%d,y=%d,x_extent=%d,y_extent=%d", virtualPointerOutputByID[request.sender], x, y, xExtent, yExtent))
+		case objectKindByID[request.sender] == "zwlr_virtual_pointer_v1" && request.opcode == 2:
+			button := fakeWaylandUint32(request.payload[4:8])
+			state := fakeWaylandUint32(request.payload[8:12])
+			r.recordRequest(fmt.Sprintf("zwlr_virtual_pointer_v1.button:output=%s,button=%d,state=%d", virtualPointerOutputByID[request.sender], button, state))
+		case objectKindByID[request.sender] == "zwlr_virtual_pointer_v1" && request.opcode == 4:
+			r.recordRequest(fmt.Sprintf("zwlr_virtual_pointer_v1.frame:output=%s", virtualPointerOutputByID[request.sender]))
+		case objectKindByID[request.sender] == "zwlr_virtual_pointer_v1" && request.opcode == 8:
+			delete(objectKindByID, request.sender)
+			delete(virtualPointerOutputByID, request.sender)
+			r.recordRequest("zwlr_virtual_pointer_v1.destroy")
 		case objectKindByID[request.sender] == waylandInterfaceCompositor && request.opcode == 0:
 			surfaceID := fakeWaylandUint32(request.payload[0:4])
 			objectKindByID[surfaceID] = "wl_surface"
@@ -337,7 +381,7 @@ func (r *fakeWaylandProtocolResponder) sendRegistryGlobals(conn net.Conn, regist
 		{Name: 2, Interface: waylandInterfaceShm, Version: 1},
 		{Name: 3, Interface: waylandInterfaceSeat, Version: 7},
 		{Name: 6, Interface: waylandInterfaceLayerShell, Version: 4},
-		{Name: 7, Interface: waylandInterfaceVirtualPointerManager, Version: 2},
+		{Name: 7, Interface: waylandInterfaceVirtualPointerManager, Version: r.virtualPointerManagerVersion},
 		{Name: 8, Interface: waylandInterfaceXDGOutputManager, Version: 3},
 	}
 	for _, output := range r.outputs {

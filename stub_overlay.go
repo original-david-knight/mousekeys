@@ -35,6 +35,7 @@ func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, atlas *FontAt
 		Overlay:       NewLayerShellOverlayBackend(wayland),
 		Keyboard:      NewXKBKeyboardEventSource(NewWaylandKeyboardRawEventSource(wayland)),
 		FontAtlas:     atlas,
+		Pointer:       NewWaylandVirtualPointerSynthesizer(wayland, systemClock{}),
 		Trace:         trace,
 	})
 }

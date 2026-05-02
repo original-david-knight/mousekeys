@@ -37,6 +37,7 @@ type WaylandClient struct {
 	seatName              string
 	layerShell            *wlrlayershell.LayerShell
 	virtualPointerManager *wlrvirtualpointer.VirtualPointerManager
+	virtualPointerVersion uint32
 	xdgOutputManager      *xdgoutput.OutputManager
 	outputs               map[uint32]*waylandOutputState
 	outputHandles         map[uint32]*wlclient.Output
@@ -158,6 +159,15 @@ func (c *WaylandClient) VirtualPointerManager() *wlrvirtualpointer.VirtualPointe
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.virtualPointerManager
+}
+
+func (c *WaylandClient) VirtualPointerManagerVersion() uint32 {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.virtualPointerVersion
 }
 
 func (c *WaylandClient) Outputs(context.Context) ([]Monitor, error) {
@@ -301,6 +311,7 @@ func (c *WaylandClient) bindCore(plan waylandBindingPlan) error {
 	c.seat = seat
 	c.layerShell = layerShell
 	c.virtualPointerManager = virtualPointerManager
+	c.virtualPointerVersion = plan.VirtualPointerManager.Version
 	c.mu.Unlock()
 	return nil
 }

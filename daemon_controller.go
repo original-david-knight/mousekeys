@@ -198,11 +198,11 @@ func (d *DaemonController) ClickAt(ctx context.Context, p Point, button PointerB
 	}
 
 	if clickCount == 2 {
-		if err := EmitPointerDoubleClick(ctx, d.deps.Pointer, d.deps.Clock, d.monitor.Name, p, button, groupID); err != nil {
+		if err := EmitPointerDoubleClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
 			return err
 		}
 	} else {
-		if err := EmitPointerClick(ctx, d.deps.Pointer, d.deps.Clock, d.monitor.Name, p, button, groupID); err != nil {
+		if err := EmitPointerClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
 			return err
 		}
 	}

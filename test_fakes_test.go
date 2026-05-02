@@ -377,8 +377,13 @@ func (f *fakeRendererSink) Presentations() []fakeRenderPresentation {
 }
 
 type virtualPointerRecorder struct {
-	mu     sync.Mutex
-	events []recordedPointerEvent
+	mu          sync.Mutex
+	clock       Clock
+	mappingMode PointerMappingMode
+	layout      Rect
+	current     PointerMotion
+	haveCurrent bool
+	events      []recordedPointerEvent
 }
 
 type recordedPointerEvent struct {
@@ -386,46 +391,133 @@ type recordedPointerEvent struct {
 	OutputName string
 	X          int
 	Y          int
+	ProtocolX  uint32
+	ProtocolY  uint32
+	XExtent    uint32
+	YExtent    uint32
+	Mapping    PointerMappingMode
 	Button     PointerButton
 	State      ButtonState
 	Time       time.Time
 	GroupID    string
 }
 
-func (r *virtualPointerRecorder) Motion(_ context.Context, event PointerMotion) error {
+func newVirtualPointerRecorder(clock Clock) *virtualPointerRecorder {
+	return &virtualPointerRecorder{
+		clock:       clock,
+		mappingMode: PointerMappingWithOutput,
+	}
+}
+
+func newFallbackVirtualPointerRecorder(clock Clock, layout Rect) *virtualPointerRecorder {
+	return &virtualPointerRecorder{
+		clock:       clock,
+		mappingMode: PointerMappingFallback,
+		layout:      layout,
+	}
+}
+
+func (r *virtualPointerRecorder) MoveAbsolute(_ context.Context, x int, y int, output Monitor) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	clock := r.clock
+	if clock == nil {
+		clock = systemClock{}
+	}
+	mode := r.mappingMode
+	if mode == "" {
+		mode = PointerMappingWithOutput
+	}
+	motion, err := pointerMotionFromLogical(clock, output, x, y, mode, r.layout)
+	if err != nil {
+		return err
+	}
+	r.current = motion
+	r.haveCurrent = true
 	r.record(recordedPointerEvent{
 		Kind:       "motion",
-		OutputName: event.OutputName,
-		X:          event.X,
-		Y:          event.Y,
-		Time:       event.Time,
-		GroupID:    event.GroupID,
+		OutputName: motion.OutputName,
+		X:          motion.X,
+		Y:          motion.Y,
+		ProtocolX:  motion.ProtocolX,
+		ProtocolY:  motion.ProtocolY,
+		XExtent:    motion.XExtent,
+		YExtent:    motion.YExtent,
+		Mapping:    motion.Mapping,
+		Time:       motion.Time,
+	})
+	r.record(recordedPointerEvent{
+		Kind:       "frame",
+		OutputName: motion.OutputName,
+		X:          motion.X,
+		Y:          motion.Y,
+		ProtocolX:  motion.ProtocolX,
+		ProtocolY:  motion.ProtocolY,
+		XExtent:    motion.XExtent,
+		YExtent:    motion.YExtent,
+		Mapping:    motion.Mapping,
+		Time:       motion.Time,
 	})
 	return nil
 }
 
-func (r *virtualPointerRecorder) Button(_ context.Context, event PointerButtonEvent) error {
+func (r *virtualPointerRecorder) LeftClick(context.Context) error {
+	return r.click(PointerButtonLeft)
+}
+
+func (r *virtualPointerRecorder) RightClick(context.Context) error {
+	return r.click(PointerButtonRight)
+}
+
+func (r *virtualPointerRecorder) DoubleClick(ctx context.Context) error {
+	if err := r.LeftClick(ctx); err != nil {
+		return err
+	}
+	return r.LeftClick(ctx)
+}
+
+func (r *virtualPointerRecorder) click(button PointerButton) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.haveCurrent {
+		return fmt.Errorf("cannot click before MoveAbsolute")
+	}
+	clock := r.clock
+	if clock == nil {
+		clock = systemClock{}
+	}
+	event := PointerButtonEvent{
+		OutputName: r.current.OutputName,
+		X:          r.current.X,
+		Y:          r.current.Y,
+		Button:     button,
+		Time:       clock.Now(),
+	}
 	r.record(recordedPointerEvent{
 		Kind:       "button",
 		OutputName: event.OutputName,
 		X:          event.X,
 		Y:          event.Y,
 		Button:     event.Button,
-		State:      event.State,
+		State:      ButtonDown,
 		Time:       event.Time,
-		GroupID:    event.GroupID,
 	})
-	return nil
-}
-
-func (r *virtualPointerRecorder) Frame(_ context.Context, event PointerFrame) error {
+	r.record(recordedPointerEvent{
+		Kind:       "button",
+		OutputName: event.OutputName,
+		X:          event.X,
+		Y:          event.Y,
+		Button:     event.Button,
+		State:      ButtonUp,
+		Time:       event.Time,
+	})
 	r.record(recordedPointerEvent{
 		Kind:       "frame",
 		OutputName: event.OutputName,
 		X:          event.X,
 		Y:          event.Y,
 		Time:       event.Time,
-		GroupID:    event.GroupID,
 	})
 	return nil
 }
@@ -454,8 +546,6 @@ func (r *virtualPointerRecorder) ClickCount(groupID string, button PointerButton
 }
 
 func (r *virtualPointerRecorder) record(event recordedPointerEvent) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.events = append(r.events, event)
 }
 

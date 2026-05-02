@@ -63,8 +63,8 @@ func TestBuildWaylandBindingPlanReportsMissingRequiredGlobal(t *testing.T) {
 	}
 }
 
-func TestBuildWaylandBindingPlanReportsUnsupportedGlobalVersion(t *testing.T) {
-	_, err := buildWaylandBindingPlan([]WaylandGlobal{
+func TestBuildWaylandBindingPlanAcceptsVirtualPointerV1ForFallback(t *testing.T) {
+	plan, err := buildWaylandBindingPlan([]WaylandGlobal{
 		{Name: 1, Interface: waylandInterfaceCompositor, Version: 6},
 		{Name: 2, Interface: waylandInterfaceShm, Version: 1},
 		{Name: 3, Interface: waylandInterfaceSeat, Version: 7},
@@ -72,13 +72,11 @@ func TestBuildWaylandBindingPlanReportsUnsupportedGlobalVersion(t *testing.T) {
 		{Name: 5, Interface: waylandInterfaceLayerShell, Version: 4},
 		{Name: 6, Interface: waylandInterfaceVirtualPointerManager, Version: 1},
 	})
-	if err == nil {
-		t.Fatalf("binding plan succeeded with virtual pointer manager v1")
+	if err != nil {
+		t.Fatalf("binding plan rejected virtual pointer manager v1 fallback: %v", err)
 	}
-	for _, want := range []string{"unsupported global versions", waylandInterfaceVirtualPointerManager, ">=2"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %q, want substring %q", err.Error(), want)
-		}
+	if plan.VirtualPointerManager.Global.Name != 6 || plan.VirtualPointerManager.Version != 1 {
+		t.Fatalf("virtual pointer binding = %+v, want global 6 v1", plan.VirtualPointerManager)
 	}
 }
 

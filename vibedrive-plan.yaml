@@ -390,7 +390,7 @@ tasks:
         button-down/button-up + frame events as required by the protocol.
 
         No ydotool or uinput dependency — direct Wayland protocol only.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base

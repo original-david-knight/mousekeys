@@ -26,3 +26,6 @@ tasks:
     - id: wayland-keyboard-input
       status: done
       notes: 'Review fixes made raw Wayland keyboard events reliable: sends no longer drop keymap/error events, Close is coordinated with emits, enter/leave/destroy/keymap reset pressed bookkeeping, and modifier/keymap-reset paths are covered. Double-click remains a later timing/FSM concern, not a one-key mapper token.'
+    - id: wlr-virtual-pointer
+      status: done
+      notes: Added direct wlr-virtual-pointer synthesis. The registry must accept manager v1 for fallback; v2 uses create_virtual_pointer_with_output. Fallback normalizes focused-output local coords by virtual layout bounds so non-zero and negative monitor origins are covered by tests.

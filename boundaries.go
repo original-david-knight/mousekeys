@@ -96,9 +96,10 @@ type KeyboardEvent struct {
 }
 
 type PointerSynthesizer interface {
-	Motion(context.Context, PointerMotion) error
-	Button(context.Context, PointerButtonEvent) error
-	Frame(context.Context, PointerFrame) error
+	MoveAbsolute(ctx context.Context, x int, y int, output Monitor) error
+	LeftClick(context.Context) error
+	RightClick(context.Context) error
+	DoubleClick(context.Context) error
 }
 
 type PointerButton string
@@ -115,10 +116,22 @@ const (
 	ButtonUp   ButtonState = "up"
 )
 
+type PointerMappingMode string
+
+const (
+	PointerMappingWithOutput PointerMappingMode = "with_output"
+	PointerMappingFallback   PointerMappingMode = "fallback"
+)
+
 type PointerMotion struct {
 	OutputName string
 	X          int
 	Y          int
+	ProtocolX  uint32
+	ProtocolY  uint32
+	XExtent    uint32
+	YExtent    uint32
+	Mapping    PointerMappingMode
 	Time       time.Time
 	GroupID    string
 }
