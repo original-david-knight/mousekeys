@@ -832,7 +832,7 @@ tasks:
         If a real Hyprland session is available, record optional manual run steps
         and observed results in the task notes, but do not depend on human
         observation to pass the checkpoint. Fix any regressions before finalize.
-      status: todo
+      status: done
       workflow: checkpoint
       deps:
         - basic-flow-checkpoint

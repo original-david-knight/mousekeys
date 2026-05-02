@@ -56,3 +56,6 @@ tasks:
     - id: basic-flow-checkpoint
       status: done
       notes: 'go build ./..., go vet ./..., and go test ./... all passed. Headless smoke exercised the show -> M,K -> Enter flow: active overlay on HEADLESS-1 with 26x26 grid, 4 trigger-to-click keystrokes, pointer_click trace button=left count=1 output=HEADLESS-1 x=250 y=210 group_id=click-1 after left_click_pending timeout_ms=250, then stay_active_reset. No regressions or plan adjustments.'
+    - id: acceptance-checkpoint
+      status: done
+      notes: 'Headless PRD acceptance suite passed all six PRD checks uncached; full go test -count=1 ./..., go vet ./..., go build ./..., and explicit .vibedrive/tmp binary build passed. hyprctl confirmed a live Hyprland session with focused eDP-2 scale=2 at origin 0,0; no visual manual overlay smoke was used as a pass gate. Replan note: keep deterministic fake fixtures for offset-origin and scaled-output coverage, and preserve the no-main-grid-render-between-double-click-button-downs assertion.'
