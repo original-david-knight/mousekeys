@@ -103,7 +103,7 @@ Mouse Keys creates its default config on first daemon start:
 ~/.config/mousekeys/config.toml
 ```
 
-The config is reloaded when the daemon restarts. There is no live config reload in v1. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`. Use the optional `Shift-` prefix for shifted key chords, for example `Shift-space`.
+The config is reloaded when the daemon restarts. There is no live config reload in v1. Existing config files are not rewritten when defaults change; edit `~/.config/mousekeys/config.toml` manually to adopt new defaults. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`. Use the optional `Shift-` prefix for shifted key chords, for example `Shift-space`.
 
 Default `config.toml`:
 
