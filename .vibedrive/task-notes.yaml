@@ -17,3 +17,6 @@ tasks:
     - id: wayland-client-base
       status: done
       notes: Pinned pure-Go go-wayland runtime/scanner and checked in wlroots 0.18.2 XMLs plus generated bindings. Post-review fake-protocol tests now cover registry orchestration, xdg-output events, seat capability failures, focused-output matching, and shared client state is mutex-guarded with deadline-based roundtrip cancellation.
+    - id: font-atlas-render
+      status: done
+      notes: Chose a bundled pre-baked bitmap atlas instead of FreeType to avoid cgo/native deps and system-font variability. Peer review cleanup removed temporary daemon-loop/atlas compatibility shims; grid/HUD render phases can reuse the single cached atlas from DaemonController.FontAtlas().

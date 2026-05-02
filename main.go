@@ -82,7 +82,12 @@ func runDaemonCommand(args []string, log *logger) error {
 	if err != nil {
 		return err
 	}
-	if _, err := LoadConfigFile(configPath); err != nil {
+	config, err := LoadConfigFile(configPath)
+	if err != nil {
+		return err
+	}
+	fontAtlas, err := NewFontAtlasFromConfig(config)
+	if err != nil {
 		return err
 	}
 
@@ -100,15 +105,20 @@ func runDaemonCommand(args []string, log *logger) error {
 		"xdg_runtime_dir":             os.Getenv("XDG_RUNTIME_DIR"),
 		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
 		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),
+		"label_font_size":             fmt.Sprintf("%d", fontAtlas.LabelFontSize()),
+		"hud_font_size":               fmt.Sprintf("%d", fontAtlas.HUDFontSize()),
 	})
 	trace.Record("state", "daemon_starting", map[string]any{
 		"xdg_runtime_dir":             os.Getenv("XDG_RUNTIME_DIR"),
 		"wayland_display":             os.Getenv("WAYLAND_DISPLAY"),
 		"hyprland_instance_signature": os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"),
+		"label_font_size":             fontAtlas.LabelFontSize(),
+		"hud_font_size":               fontAtlas.HUDFontSize(),
+		"font_glyph_count":            fontAtlas.GlyphCount(FontRoleLabel),
 	})
 	log.Debug("daemon entering IPC loop", nil)
 
-	return runDaemonLoopWithTrace(ctx, log, trace)
+	return runDaemonLoopWithTrace(ctx, log, trace, fontAtlas)
 }
 
 func runClientCommand(command string, args []string, log *logger) error {
@@ -145,8 +155,8 @@ func runClientCommand(command string, args []string, log *logger) error {
 	return nil
 }
 
-func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder) error {
-	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedStubDaemonController(trace))
+func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder, fontAtlas *FontAtlas) error {
+	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedStubDaemonController(trace, fontAtlas))
 }
 
 func runDaemonLoop(ctx context.Context, log *logger, trace TraceRecorder, controller *DaemonController) error {

@@ -275,7 +275,7 @@ tasks:
         - Be deterministic so snapshot tests can compare output.
         - Pre-rasterize once at daemon start (or build time for a pre-baked atlas)
           so the show path stays fast.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

@@ -16,6 +16,7 @@ type DaemonDeps struct {
 	MonitorLookup FocusedMonitorLookup
 	Overlay       WaylandOverlayBackend
 	Renderer      RendererBufferSink
+	FontAtlas     *FontAtlas
 	Pointer       PointerSynthesizer
 	Clock         Clock
 	Trace         TraceRecorder
@@ -46,6 +47,13 @@ func (d *DaemonController) State() DaemonState {
 		return DaemonStateInactive
 	}
 	return d.state
+}
+
+func (d *DaemonController) FontAtlas() *FontAtlas {
+	if d == nil {
+		return nil
+	}
+	return d.deps.FontAtlas
 }
 
 func (d *DaemonController) Show(ctx context.Context) error {

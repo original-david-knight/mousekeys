@@ -20,10 +20,11 @@ func NewStubDaemonController(trace TraceRecorder) *DaemonController {
 	})
 }
 
-func NewHyprlandBackedStubDaemonController(trace TraceRecorder) *DaemonController {
+func NewHyprlandBackedStubDaemonController(trace TraceRecorder, atlas *FontAtlas) *DaemonController {
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: NewHyprlandIPCClientFromEnv(),
 		Overlay:       stubOverlayBackend{},
+		FontAtlas:     atlas,
 		Trace:         trace,
 	})
 }
