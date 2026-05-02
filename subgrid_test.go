@@ -82,6 +82,97 @@ func TestNewSubgridGeometryUsesCellSizeCountsAndVisiblePlacement(t *testing.T) {
 	}
 }
 
+func TestSubgridNavigationFSMUsesVimKeysWithoutVisibleInput(t *testing.T) {
+	mainCell := Rect{X: 10, Y: 20, Width: 20, Height: 20}
+	bounds := Rect{X: 0, Y: 0, Width: 80, Height: 80}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, 4, 4, mainCell.Center())
+
+	if got, want := fsm.Point(), mainCell.Center(); got != want {
+		t.Fatalf("initial point = %+v, want %+v", got, want)
+	}
+
+	left := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'})
+	if !left.Changed || left.Direction != SubgridMoveLeft || left.Column != 1 || left.Row != 2 || left.Point != (Point{X: 15, Y: 30}) {
+		t.Fatalf("H result = %+v, want left to column 1 with unchanged Y", left)
+	}
+
+	down := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'J'})
+	if !down.Changed || down.Direction != SubgridMoveDown || down.Column != 1 || down.Row != 3 || down.Point != (Point{X: 15, Y: 35}) {
+		t.Fatalf("J result = %+v, want down to row 3 with unchanged X", down)
+	}
+
+	up := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'K'})
+	if !up.Changed || up.Direction != SubgridMoveUp || up.Column != 1 || up.Row != 2 || up.Point != (Point{X: 15, Y: 30}) {
+		t.Fatalf("K result = %+v, want up to row 2 with unchanged X", up)
+	}
+
+	right := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'L'})
+	if !right.Changed || right.Direction != SubgridMoveRight || right.Column != 2 || right.Row != 2 || right.Point != (Point{X: 20, Y: 30}) {
+		t.Fatalf("L result = %+v, want right to column 2 with unchanged Y", right)
+	}
+}
+
+func TestSubgridNavigationFSMUsesArrowKeys(t *testing.T) {
+	mainCell := Rect{X: 10, Y: 20, Width: 20, Height: 20}
+	bounds := Rect{X: 0, Y: 0, Width: 80, Height: 80}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, 4, 4, mainCell.Center())
+
+	left := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenCommand, KeySym: "Left"})
+	if !left.Changed || left.Direction != SubgridMoveLeft || left.Point != (Point{X: 15, Y: 30}) {
+		t.Fatalf("Left result = %+v, want left movement", left)
+	}
+	down := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenCommand, KeySym: "Down"})
+	if !down.Changed || down.Direction != SubgridMoveDown || down.Point != (Point{X: 15, Y: 35}) {
+		t.Fatalf("Down result = %+v, want down movement", down)
+	}
+	up := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenCommand, KeySym: "Up"})
+	if !up.Changed || up.Direction != SubgridMoveUp || up.Point != (Point{X: 15, Y: 30}) {
+		t.Fatalf("Up result = %+v, want up movement", up)
+	}
+	right := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenCommand, KeySym: "Right"})
+	if !right.Changed || right.Direction != SubgridMoveRight || right.Point != (Point{X: 20, Y: 30}) {
+		t.Fatalf("Right result = %+v, want right movement", right)
+	}
+}
+
+func TestSubgridNavigationFSMCanMoveBeyondSelectedCellUntilMonitorEdge(t *testing.T) {
+	mainCell := Rect{X: 10, Y: 10, Width: 10, Height: 10}
+	bounds := Rect{X: 0, Y: 0, Width: 40, Height: 40}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, 2, 2, mainCell.Center())
+
+	for i := 0; i < 4; i++ {
+		result := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'L'})
+		if !result.Changed {
+			t.Fatalf("right movement %d was ignored", i+1)
+		}
+	}
+	if got, want := fsm.Point(), (Point{X: 35, Y: 15}); got != want {
+		t.Fatalf("point after moving beyond selected cell = %+v, want %+v", got, want)
+	}
+	if got := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'L'}); !got.Changed || got.Point != (Point{X: 39, Y: 15}) {
+		t.Fatalf("right movement clamped to monitor edge = %+v, want changed to x=39", got)
+	}
+	if got := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'L'}); got.Changed {
+		t.Fatalf("right movement at monitor edge = %+v, want ignored", got)
+	}
+}
+
+func TestSubgridNavigationFSMIgnoresNonMovementAndMonitorEdgeKeys(t *testing.T) {
+	mainCell := Rect{X: 0, Y: 0, Width: 9, Height: 9}
+	bounds := Rect{X: 0, Y: 0, Width: 20, Height: 20}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, 3, 3, Point{X: 0, Y: 0})
+
+	if result := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'A'}); result.Changed {
+		t.Fatalf("non-HJKL result = %+v, want ignored", result)
+	}
+	if result := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}); result.Changed {
+		t.Fatalf("left at first column result = %+v, want ignored", result)
+	}
+	if result := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'K'}); result.Changed {
+		t.Fatalf("up at first row result = %+v, want ignored", result)
+	}
+}
+
 func TestSubgridRefinementFSMFullXYCommit(t *testing.T) {
 	mainCell := Rect{X: 10, Y: 20, Width: 20, Height: 30}
 	fsm := NewSubgridRefinementFSM(mainCell, 4, 6)

@@ -137,6 +137,23 @@ func TestKeyboardInputMapperDoesNotEmitDoubleClickSequenceCommand(t *testing.T) 
 	}
 }
 
+func TestKeyboardInputMapperEmitsArrowKeysForSubgridNavigation(t *testing.T) {
+	mapper, err := NewKeyboardInputMapper(DefaultConfig())
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+
+	for _, key := range []string{"Left", "Down", "Up", "Right", "KP_Left", "KP_Down", "KP_Up", "KP_Right"} {
+		token, ok := mapper.Translate(KeyboardEvent{Key: key, Pressed: true})
+		if !ok {
+			t.Fatalf("%s did not produce a token", key)
+		}
+		if token.Kind != KeyboardTokenCommand || token.KeySym != KeySym(key) || len(token.Commands) != 0 {
+			t.Fatalf("%s token = %+v, want command token without configured commands", key, token)
+		}
+	}
+}
+
 func TestKeyboardInputMapperTreatsKeypadEnterAsReturnForDefaultClickBindings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

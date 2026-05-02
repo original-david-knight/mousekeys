@@ -68,23 +68,21 @@ A keyboard-driven mouse control utility for Arch Linux + Hyprland. Triggered by 
 
 ### 3. Cursor move + sub-grid
 - After the second letter, the cursor moves to the center of the selected cell.
-- The main grid is **hidden**, replaced by a **small floating sub-grid** rendered at the cursor location.
-- The sub-grid:
-  - Represents the selected main-grid cell and is drawn around the cursor, clipped or shifted as needed to remain visible on the focused monitor.
-  - Targets **~5 logical pixels per sub-cell**, capped at **26 sub-cells per axis** so single-letter labels remain sufficient.
+- The main grid is **hidden** immediately after selection, leaving only the outline of the selected cell visible.
+- A hidden sub-cell grid represents the selected main-grid cell:
+  - It targets **~5 logical pixels per sub-cell**, capped at **26 sub-cells per axis**.
   - Sub-cell count per axis is `min(26, max(1, round(main_cell_axis_size / subgrid_pixel_size)))`; actual sub-cell size may be larger than the target on high-resolution displays.
-  - Letters are labeled along the top (horizontal) and left (vertical) edges from A through the last available sub-cell. Letter keys outside the available range are ignored.
-  - User may type **two letters** for full XY refinement, or **just the horizontal letter + Tab** to commit refinement on X only (Y stays at the main cell's vertical center).
+  - The user may press Vim movement keys or arrow keys to move by hidden sub-cell steps: `H`/Left, `J`/Down, `K`/Up, `L`/Right.
+  - Movement may continue outside the selected main-grid cell and is clamped only by the focused monitor edges.
+  - The hidden sub-cell grid itself is not rendered.
 
 ### 4. Commit / click
 Configurable key bindings (defaults shown):
 - `Enter` → **left click**
 - `Space` → **right click**
 - `Enter` `Enter` within `double_click_timeout_ms` → **double click**
-- `Tab` → **commit partial sub-grid input** (horizontal-only refinement)
 - `Esc` → **commit cursor position without clicking** and **exit** the tool
 
-A click also **auto-commits** any pending partial sub-grid input.
 For the default double-click binding, the daemon waits up to `double_click_timeout_ms` after the first `Enter`. If a second `Enter` arrives before the timeout, it emits a double click; otherwise it emits a single left click and then applies stay-active behavior.
 
 ### 5. Stay-active behavior
@@ -118,7 +116,6 @@ subgrid_pixel_size = 5       # target pixel size per sub-cell
 left_click = "Return"
 right_click = "space"
 double_click = "Return Return"
-commit_partial = "Tab"
 exit = "Escape"
 backspace = "BackSpace"
 
@@ -178,6 +175,7 @@ exec-once = mousekeys daemon
 ## Acceptance Checks
 - `mousekeys show` displays a 26x26 grid on the focused monitor and captures keyboard input.
 - A normal left click completes in the expected 3-5 keystrokes from trigger to click.
+- After coordinate entry, only the selected-cell outline remains visible and `H/J/K/L` plus arrow keys move the cursor through the hidden sub-cell grid, beyond the selected cell if needed.
 - Double-click emits two left-button clicks at the same committed cursor position without reopening the main grid between clicks.
 - Focused-monitor behavior works when the focused monitor has a non-zero virtual-layout origin.
 - Grid and pointer targeting remain correct on a scaled monitor.
@@ -190,7 +188,7 @@ exec-once = mousekeys daemon
 - X11 support.
 - GUI configuration tool.
 - Live config reload.
-- Recursive (sub-sub-grid) refinement and arrow-key nudge — held in reserve in case 5px sub-grid resolution proves insufficient in practice.
+- Recursive (sub-sub-grid) refinement.
 
 ## Open Questions (to resolve during implementation)
 _All resolved — see body of PRD._

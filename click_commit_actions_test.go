@@ -120,37 +120,37 @@ func TestDaemonRightClickAndStayActiveFalseExitAfterClick(t *testing.T) {
 	}
 }
 
-func TestDaemonTabCommitThenRightClickUsesRefinedPoint(t *testing.T) {
+func TestDaemonHJKLThenRightClickUsesRefinedPoint(t *testing.T) {
 	ctx := context.Background()
 	controller, _, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'C', KeySym: "C"}); err != nil {
-		t.Fatalf("handle subgrid X: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H', KeySym: "h"}); err != nil {
+		t.Fatalf("handle H subgrid move: %v", err)
 	}
-	if err := controller.HandleKeyboardToken(ctx, commandToken("Tab", KeyboardCommandCommitPartial)); err != nil {
-		t.Fatalf("handle Tab commit partial: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'J', KeySym: "j"}); err != nil {
+		t.Fatalf("handle J subgrid move: %v", err)
 	}
-	refined := xOnlySubgridPointForTest(t, mainCell, 4, 2)
+	refined := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'J')
 	assertLastPointerMotion(t, pointer, focused, refined)
 
 	if err := controller.HandleKeyboardToken(ctx, commandToken("space", KeyboardCommandRightClick)); err != nil {
-		t.Fatalf("handle Space after Tab: %v", err)
+		t.Fatalf("handle Space after H/J: %v", err)
 	}
 	waitForPointerClickCount(t, pointer, PointerButtonRight, 1)
 	assertLastPointerMotion(t, pointer, focused, refined)
 }
 
-func TestDaemonClickAutoCommitsPendingSubgridPartial(t *testing.T) {
+func TestDaemonClickUsesCurrentHiddenSubgridPoint(t *testing.T) {
 	ctx := context.Background()
 	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'C', KeySym: "C"}); err != nil {
-		t.Fatalf("handle subgrid X: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'L', KeySym: "l"}); err != nil {
+		t.Fatalf("handle L subgrid move: %v", err)
 	}
-	refined := xOnlySubgridPointForTest(t, mainCell, 4, 2)
+	refined := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'L')
 
 	if err := controller.HandleKeyboardToken(ctx, commandToken("Return", KeyboardCommandLeftClick)); err != nil {
-		t.Fatalf("handle Enter after partial subgrid X: %v", err)
+		t.Fatalf("handle Enter after hidden subgrid move: %v", err)
 	}
 	assertLastPointerMotion(t, pointer, focused, refined)
 	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
@@ -246,13 +246,4 @@ func waitForPointerClickCount(t *testing.T, pointer *virtualPointerRecorder, but
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("%s pointer clicks = %d, want at least %d; events=%+v", button, countPointerClicks(pointer, button), want, pointer.Events())
-}
-
-func xOnlySubgridPointForTest(t *testing.T, mainCell Rect, xCount int, col int) Point {
-	t.Helper()
-	x0, x1, err := axisSegment(mainCell.Width, xCount, col)
-	if err != nil {
-		t.Fatalf("expected X segment: %v", err)
-	}
-	return Point{X: mainCell.X + centeredInSpan(x0, x1, 1), Y: mainCell.Center().Y}
 }

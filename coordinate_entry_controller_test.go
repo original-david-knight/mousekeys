@@ -64,7 +64,7 @@ func TestDaemonKeyboardCoordinateEntryUpdatesGridAndEmitsSelection(t *testing.T)
 	}
 	assertLastPointerMotion(t, pointer, focused, wantBounds.Center())
 	waitForRendererPresentationCount(t, renderer, 5)
-	assertLastRendererHashMatchesSubgrid(t, renderer, focused, config, atlas, wantBounds, wantBounds.Center())
+	assertLastRendererHashMatchesSelectedCell(t, renderer, focused, config, wantBounds)
 }
 
 func TestDaemonHideAndShowToggleResetCoordinateEntry(t *testing.T) {
@@ -116,7 +116,7 @@ func TestDaemonHideAndShowToggleResetCoordinateEntry(t *testing.T) {
 	assertLastRendererHashMatchesMainGrid(t, renderer, focused, config, atlas, DefaultMainGridHUD, nil)
 }
 
-func TestDaemonSubgridInputRefinesPointerXYAndIgnoresOutOfRangeLetters(t *testing.T) {
+func TestDaemonHiddenSubgridVimKeysMovePointerAndIgnoreOtherLetters(t *testing.T) {
 	ctx := context.Background()
 	config := DefaultConfig()
 	atlas, err := NewFontAtlasFromConfig(config)
@@ -145,33 +145,32 @@ func TestDaemonSubgridInputRefinesPointerXYAndIgnoresOutOfRangeLetters(t *testin
 	beforePresentations := len(renderer.Presentations())
 	beforePointerEvents := len(pointer.Events())
 	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'E'}); err != nil {
-		t.Fatalf("handle out-of-range subgrid X: %v", err)
+		t.Fatalf("handle non-navigation letter: %v", err)
 	}
 	if got := len(renderer.Presentations()); got != beforePresentations {
-		t.Fatalf("renderer presentations after ignored subgrid X = %d, want %d", got, beforePresentations)
+		t.Fatalf("renderer presentations after ignored letter = %d, want %d", got, beforePresentations)
 	}
 	if got := len(pointer.Events()); got != beforePointerEvents {
-		t.Fatalf("pointer events after ignored subgrid X = %d, want %d", got, beforePointerEvents)
+		t.Fatalf("pointer events after ignored letter = %d, want %d", got, beforePointerEvents)
 	}
 
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'B'}); err != nil {
-		t.Fatalf("handle subgrid X: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}); err != nil {
+		t.Fatalf("handle H subgrid move: %v", err)
 	}
-	if got, want := len(pointer.Events()), beforePointerEvents; got != want {
-		t.Fatalf("pointer events after partial subgrid X = %d, want %d", got, want)
-	}
+	left := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H')
+	assertLastPointerMotion(t, pointer, focused, left)
 
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'D'}); err != nil {
-		t.Fatalf("handle subgrid Y: %v", err)
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'J'}); err != nil {
+		t.Fatalf("handle J subgrid move: %v", err)
 	}
-	refined, err := SubgridCellBounds(mainCell, 4, 4, 1, 3)
-	if err != nil {
-		t.Fatalf("expected refined subgrid bounds: %v", err)
+	refined := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'J')
+	assertLastPointerMotion(t, pointer, focused, refined)
+	if got := len(renderer.Presentations()); got != beforePresentations {
+		t.Fatalf("renderer presentations after hidden subgrid moves = %d, want %d", got, beforePresentations)
 	}
-	assertLastPointerMotion(t, pointer, focused, refined.Center())
 }
 
-func TestDaemonSubgridTabCommitsXOnlyRefinement(t *testing.T) {
+func TestDaemonHiddenSubgridVimKeysContinueBeyondSelectedCellAndClampAtMonitorEdge(t *testing.T) {
 	ctx := context.Background()
 	config := DefaultConfig()
 	atlas, err := NewFontAtlasFromConfig(config)
@@ -195,19 +194,30 @@ func TestDaemonSubgridTabCommitsXOnlyRefinement(t *testing.T) {
 	}
 
 	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'C'}); err != nil {
-		t.Fatalf("handle subgrid X: %v", err)
+	for i := 0; i < 3; i++ {
+		if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}); err != nil {
+			t.Fatalf("handle H subgrid move %d: %v", i+1, err)
+		}
 	}
-	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenCommand, Commands: []KeyboardCommand{KeyboardCommandCommitPartial}}); err != nil {
-		t.Fatalf("handle subgrid Tab: %v", err)
+	want := hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'H', 'H')
+	if want.X >= mainCell.X {
+		t.Fatalf("test expected point beyond selected cell: got %+v selected cell %+v", want, mainCell)
 	}
-
-	x0, x1, err := axisSegment(mainCell.Width, 4, 2)
-	if err != nil {
-		t.Fatalf("expected X segment: %v", err)
-	}
-	want := Point{X: mainCell.X + centeredInSpan(x0, x1, 1), Y: mainCell.Center().Y}
 	assertLastPointerMotion(t, pointer, focused, want)
+
+	for i := 0; i < 100; i++ {
+		if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}); err != nil {
+			t.Fatalf("handle H toward monitor edge %d: %v", i+1, err)
+		}
+	}
+	assertLastPointerMotion(t, pointer, focused, Point{X: 0, Y: want.Y})
+	beforePointerEvents := len(pointer.Events())
+	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}); err != nil {
+		t.Fatalf("handle H at monitor edge: %v", err)
+	}
+	if got := len(pointer.Events()); got != beforePointerEvents {
+		t.Fatalf("pointer events after H at monitor edge = %d, want %d", got, beforePointerEvents)
+	}
 }
 
 func assertLastRendererHashMatchesMainGrid(t *testing.T, renderer *fakeRendererSink, monitor Monitor, config Config, atlas *FontAtlas, hud string, selectedColumn *int) {
@@ -234,30 +244,47 @@ func assertLastRendererHashMatchesMainGrid(t *testing.T, renderer *fakeRendererS
 	}
 }
 
-func assertLastRendererHashMatchesSubgrid(t *testing.T, renderer *fakeRendererSink, monitor Monitor, config Config, atlas *FontAtlas, mainCell Rect, cursor Point) {
+func assertLastRendererHashMatchesSelectedCell(t *testing.T, renderer *fakeRendererSink, monitor Monitor, config Config, cell Rect) {
 	t.Helper()
-	geometry, err := NewSubgridGeometry(monitor, mainCell, cursor, config.Grid.SubgridPixelSize)
-	if err != nil {
-		t.Fatalf("new expected subgrid geometry: %v", err)
-	}
 	expected, err := NewARGBBuffer(monitor.Width, monitor.Height)
 	if err != nil {
 		t.Fatalf("new expected buffer: %v", err)
 	}
-	if err := RenderSubgridOverlay(expected, SubgridRenderOptions{
-		Geometry:   geometry,
+	if err := RenderSelectedCellOverlay(expected, SelectedCellRenderOptions{
+		Cell:       cell,
 		Appearance: config.Appearance,
-		FontAtlas:  atlas,
 	}); err != nil {
-		t.Fatalf("render expected subgrid: %v", err)
+		t.Fatalf("render expected selected cell: %v", err)
 	}
 	presentations := renderer.Presentations()
 	if len(presentations) == 0 {
 		t.Fatalf("renderer has no presentations")
 	}
 	if got, want := presentations[len(presentations)-1].Hash, mustARGBHash(t, expected); got != want {
-		t.Fatalf("last renderer hash = %s, want %s for subgrid %+v", got, want, geometry)
+		t.Fatalf("last renderer hash = %s, want %s for selected cell %+v", got, want, cell)
 	}
+}
+
+func hiddenSubgridPointAfterMovesForTest(t *testing.T, bounds Rect, mainCell Rect, config Config, start Point, moves ...byte) Point {
+	t.Helper()
+	xCount, err := SubgridAxisCount(mainCell.Width, config.Grid.SubgridPixelSize)
+	if err != nil {
+		t.Fatalf("expected hidden subgrid X count: %v", err)
+	}
+	yCount, err := SubgridAxisCount(mainCell.Height, config.Grid.SubgridPixelSize)
+	if err != nil {
+		t.Fatalf("expected hidden subgrid Y count: %v", err)
+	}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, xCount, yCount, start)
+	point := start
+	for _, move := range moves {
+		result := fsm.HandleToken(KeyboardToken{Kind: KeyboardTokenLetter, Letter: move})
+		if !result.Changed {
+			t.Fatalf("hidden subgrid move %q was ignored", move)
+		}
+		point = result.Point
+	}
+	return point
 }
 
 func selectMainGridCellForTest(t *testing.T, ctx context.Context, controller *DaemonController, monitor Monitor, gridSize int, colLetter byte, rowLetter byte) Rect {

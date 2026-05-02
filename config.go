@@ -18,7 +18,6 @@ subgrid_pixel_size = 5       # target pixel size per sub-cell
 left_click = "Return"
 right_click = "space"
 double_click = "Return Return"
-commit_partial = "Tab"
 exit = "Escape"
 backspace = "BackSpace"
 

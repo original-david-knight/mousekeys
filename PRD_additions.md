@@ -6,7 +6,7 @@ The grid overlay must remain translucent while staying legible across light, dar
 
 ### Grid Lines
 
-- Main-grid and subgrid lines use a translucent bluish core color instead of white.
+- Main-grid and selected-cell outline lines use a translucent bluish core color instead of white.
 - Each line also renders a wider, darker blue halo behind the core stroke.
 - The halo must not turn the overlay into an opaque panel; empty cells remain transparent.
 - `appearance.grid_opacity` continues to control the visible grid-line strength.
@@ -14,13 +14,24 @@ The grid overlay must remain translucent while staying legible across light, dar
 
 ### Edge Labels
 
-- Main-grid edge labels and subgrid edge labels use the same high-contrast treatment as the grid lines.
+- Main-grid edge labels use the same high-contrast treatment as the grid lines.
 - Labels render with a green-tinted foreground and a dark outline/halo.
 - Labels remain clipped to their existing edge cells:
   - Main-grid column labels stay on the top and bottom edges.
   - Main-grid row labels stay on the left and right edges.
-  - Subgrid labels stay on the top and left edges.
 - Labels must remain readable on both bright and dark backgrounds without requiring an opaque label box.
+
+### Hidden Subcell Navigation
+
+- After the main-grid coordinate is entered, the mouse moves immediately to the center of the selected cell.
+- The full grid disappears after that move; only the selected-cell outline remains visible.
+- The subcell grid is not rendered.
+- Direction keys move the cursor by hidden subcell steps:
+  - `H` or Left moves left.
+  - `J` or Down moves down.
+  - `K` or Up moves up.
+  - `L` or Right moves right.
+- Movement is not limited to the selected cell. It can continue across the focused monitor and clamps only at the focused monitor edges.
 
 ### Wayland Alpha Handling
 
@@ -34,5 +45,6 @@ The grid overlay must remain translucent while staying legible across light, dar
 - The grid remains transparent between strokes and labels.
 - Grid lines remain visible on both very light and very dark backgrounds due to the dark halo.
 - Edge letters are green-tinted, outlined, and readable against varied backgrounds.
-- The subgrid uses the same visual treatment as the main grid.
+- The selected-cell outline remains visible after coordinate entry while the rest of the grid is hidden.
+- H/J/K/L and arrow keys move through the hidden subcell grid and can move outside the selected cell until the focused monitor edge.
 - Scaled-monitor rendering still uses logical coordinates and expands pixels correctly for Wayland buffer scale.

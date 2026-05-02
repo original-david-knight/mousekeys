@@ -10,6 +10,15 @@ const (
 	noSubgridAxis       = -1
 )
 
+type SubgridMoveDirection string
+
+const (
+	SubgridMoveLeft  SubgridMoveDirection = "left"
+	SubgridMoveDown  SubgridMoveDirection = "down"
+	SubgridMoveUp    SubgridMoveDirection = "up"
+	SubgridMoveRight SubgridMoveDirection = "right"
+)
+
 type SubgridGeometry struct {
 	MainCell Rect
 	Cursor   Point
@@ -93,6 +102,185 @@ func ShiftOrClipRectToBounds(rect Rect, bounds Rect) Rect {
 		out.Y = bounds.Y + bounds.Height - out.Height
 	}
 	return out
+}
+
+type SubgridNavigationFSM struct {
+	mainCell Rect
+	bounds   Rect
+	xCount   int
+	yCount   int
+	xStep    int
+	yStep    int
+	col      int
+	row      int
+	point    Point
+}
+
+type SubgridNavigationResult struct {
+	Changed   bool
+	Direction SubgridMoveDirection
+	Column    int
+	Row       int
+	Point     Point
+}
+
+func NewSubgridNavigationFSM(mainCell Rect, bounds Rect, xCount int, yCount int, start Point) *SubgridNavigationFSM {
+	if bounds.Width <= 0 || bounds.Height <= 0 {
+		bounds = mainCell
+	}
+	return &SubgridNavigationFSM{
+		mainCell: mainCell,
+		bounds:   bounds,
+		xCount:   xCount,
+		yCount:   yCount,
+		xStep:    subgridNavigationStep(mainCell.Width, xCount),
+		yStep:    subgridNavigationStep(mainCell.Height, yCount),
+		col:      subgridAxisIndexForPoint(start.X-mainCell.X, mainCell.Width, xCount),
+		row:      subgridAxisIndexForPoint(start.Y-mainCell.Y, mainCell.Height, yCount),
+		point:    clampPointToRect(start, bounds),
+	}
+}
+
+func (f *SubgridNavigationFSM) Reset() {
+	if f == nil {
+		return
+	}
+	f.point = Point{}
+	f.col = 0
+	f.row = 0
+}
+
+func (f *SubgridNavigationFSM) Point() Point {
+	if f == nil {
+		return Point{}
+	}
+	return f.point
+}
+
+func (f *SubgridNavigationFSM) HandleToken(token KeyboardToken) SubgridNavigationResult {
+	if f == nil {
+		return SubgridNavigationResult{}
+	}
+	direction, ok := subgridMoveDirectionFromToken(token)
+	if !ok {
+		return SubgridNavigationResult{}
+	}
+
+	nextCol := f.col
+	nextRow := f.row
+	nextPoint := f.point
+	switch direction {
+	case SubgridMoveLeft:
+		nextCol--
+		nextPoint.X -= f.xStep
+	case SubgridMoveRight:
+		nextCol++
+		nextPoint.X += f.xStep
+	case SubgridMoveUp:
+		nextRow--
+		nextPoint.Y -= f.yStep
+	case SubgridMoveDown:
+		nextRow++
+		nextPoint.Y += f.yStep
+	default:
+		return SubgridNavigationResult{}
+	}
+
+	nextPoint = clampPointToRect(nextPoint, f.bounds)
+	if nextPoint == f.point {
+		return SubgridNavigationResult{}
+	}
+	f.col = nextCol
+	f.row = nextRow
+	f.point = nextPoint
+	return SubgridNavigationResult{
+		Changed:   true,
+		Direction: direction,
+		Column:    f.col,
+		Row:       f.row,
+		Point:     f.point,
+	}
+}
+
+func subgridMoveDirectionFromToken(token KeyboardToken) (SubgridMoveDirection, bool) {
+	if direction, ok := arrowSubgridMoveDirection(token.KeySym); ok {
+		return direction, true
+	}
+	if token.Kind == KeyboardTokenLetter {
+		letter, ok := normalizedGridLetter(token.Letter)
+		if !ok {
+			return "", false
+		}
+		switch letter {
+		case 'H':
+			return SubgridMoveLeft, true
+		case 'J':
+			return SubgridMoveDown, true
+		case 'K':
+			return SubgridMoveUp, true
+		case 'L':
+			return SubgridMoveRight, true
+		}
+	}
+	return "", false
+}
+
+func arrowSubgridMoveDirection(keysym KeySym) (SubgridMoveDirection, bool) {
+	switch keysym {
+	case "Left", "KP_Left":
+		return SubgridMoveLeft, true
+	case "Down", "KP_Down":
+		return SubgridMoveDown, true
+	case "Up", "KP_Up":
+		return SubgridMoveUp, true
+	case "Right", "KP_Right":
+		return SubgridMoveRight, true
+	default:
+		return "", false
+	}
+}
+
+func subgridNavigationStep(total int, count int) int {
+	if total <= 0 || count <= 0 {
+		return 1
+	}
+	step := int(math.Round(float64(total) / float64(count)))
+	if step < 1 {
+		return 1
+	}
+	return step
+}
+
+func clampPointToRect(point Point, bounds Rect) Point {
+	if bounds.Width <= 0 || bounds.Height <= 0 {
+		return point
+	}
+	return Point{
+		X: clampInt(point.X, bounds.X, bounds.X+bounds.Width-1),
+		Y: clampInt(point.Y, bounds.Y, bounds.Y+bounds.Height-1),
+	}
+}
+
+func subgridAxisIndexForPoint(offset int, total int, count int) int {
+	if count <= 1 || total <= 0 {
+		return 0
+	}
+	if offset <= 0 {
+		return 0
+	}
+	if offset >= total {
+		return count - 1
+	}
+	for i := 0; i < count; i++ {
+		_, end, err := axisSegment(total, count, i)
+		if err != nil {
+			return 0
+		}
+		if offset < end {
+			return i
+		}
+	}
+	return count - 1
 }
 
 func SubgridCellBounds(mainCell Rect, xCount int, yCount int, col int, row int) (Rect, error) {

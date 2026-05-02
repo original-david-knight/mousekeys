@@ -56,7 +56,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.show()
 
 		cell := h.sendMainCoordinate('M', 'K')
-		h.waitForTraceAction("fsm", "subgrid_shown")
+		h.waitForTraceAction("fsm", "cell_outline_shown")
 		h.sendKeys("Return")
 		h.waitForTraceAction("fsm", "left_click_pending")
 		if clicks := acceptanceClickCount(h.pointer, PointerButtonLeft); clicks != 0 {
@@ -87,12 +87,31 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.assertWaylandCount("destroy", 1)
 	})
 
+	t.Run("HJKL and arrow keys move through the hidden subcell grid while only the selected cell outline is rendered", func(t *testing.T) {
+		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
+		h.show()
+
+		cell := h.sendMainCoordinate('M', 'K')
+		h.waitForTraceAction("fsm", "cell_outline_shown")
+		outlineHash := acceptanceSelectedCellHash(t, h.focused, h.config, cell)
+		h.assertLastRendererHash(outlineHash)
+
+		beforePresentations := len(h.renderer.Presentations())
+		h.sendKeys("h", "Down", "Right")
+		want := hiddenSubgridPointAfterMovesForTest(t, h.focused.LocalRect(), cell, h.config, cell.Center(), 'H', 'J', 'L')
+		h.waitForLastPointerMotion(want)
+		if got := len(h.renderer.Presentations()); got != beforePresentations {
+			h.failf("renderer presentations after hidden H/Down/Right moves = %d, want %d", got, beforePresentations)
+		}
+		h.assertLastRendererHash(outlineHash)
+	})
+
 	t.Run("Enter Enter double-click keeps the same committed cursor and does not reopen main grid between clicks", func(t *testing.T) {
 		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
 		h.show()
 
 		cell := h.sendMainCoordinate('M', 'K')
-		h.waitForTraceAction("fsm", "subgrid_shown")
+		h.waitForTraceAction("fsm", "cell_outline_shown")
 		mainGridHash := acceptanceMainGridHash(t, h.focused, h.config, h.atlas, DefaultMainGridHUD, nil)
 
 		h.sendKeys("Return")
@@ -133,7 +152,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.show()
 
 		cell := h.sendMainCoordinate('M', 'K')
-		h.waitForTraceAction("fsm", "subgrid_shown")
+		h.waitForTraceAction("fsm", "cell_outline_shown")
 		h.sendKeys("Return")
 		h.waitForTraceAction("fsm", "left_click_pending")
 		h.clock.Advance(time.Duration(h.config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
@@ -162,7 +181,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		}
 
 		cell := h.sendMainCoordinate('M', 'K')
-		h.waitForTraceAction("fsm", "subgrid_shown")
+		h.waitForTraceAction("fsm", "cell_outline_shown")
 		h.assertWithOutputMotion(cell.Center(), focused)
 
 		presentation := h.lastPresentation()
@@ -175,7 +194,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h := newAcceptanceHarness(t, acceptanceHarnessOptions{})
 		h.show()
 		cell := h.sendMainCoordinate('M', 'K')
-		h.waitForTraceAction("fsm", "subgrid_shown")
+		h.waitForTraceAction("fsm", "cell_outline_shown")
 		h.sendKeys("Return")
 		h.waitForTraceAction("fsm", "left_click_pending")
 
@@ -554,6 +573,25 @@ func (h *acceptanceHarness) assertLastPointerMotion(point Point) {
 	h.failf("no pointer motion events recorded")
 }
 
+func (h *acceptanceHarness) waitForLastPointerMotion(point Point) {
+	h.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events := h.pointer.Events()
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Kind != "motion" {
+				continue
+			}
+			if events[i].OutputName == h.focused.Name && events[i].X == point.X && events[i].Y == point.Y {
+				return
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.assertLastPointerMotion(point)
+}
+
 func (h *acceptanceHarness) assertNoMainGridReopenBetweenFirstTwoLeftClicks(mainGridHash string) {
 	h.t.Helper()
 	buttonDowns := h.events.Filter(func(event acceptanceEvent) bool {
@@ -859,6 +897,21 @@ func acceptanceMainGridHash(t *testing.T, monitor Monitor, config Config, atlas 
 		SelectedColumn: selectedColumn,
 	}); err != nil {
 		t.Fatalf("render expected main grid: %v", err)
+	}
+	return mustARGBHash(t, buffer)
+}
+
+func acceptanceSelectedCellHash(t *testing.T, monitor Monitor, config Config, cell Rect) string {
+	t.Helper()
+	buffer, err := NewARGBBuffer(monitor.Width, monitor.Height)
+	if err != nil {
+		t.Fatalf("new expected selected-cell buffer: %v", err)
+	}
+	if err := RenderSelectedCellOverlay(buffer, SelectedCellRenderOptions{
+		Cell:       cell,
+		Appearance: config.Appearance,
+	}); err != nil {
+		t.Fatalf("render expected selected cell: %v", err)
 	}
 	return mustARGBHash(t, buffer)
 }

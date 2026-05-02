@@ -29,19 +29,19 @@ type DaemonDeps struct {
 }
 
 type DaemonController struct {
-	mu              sync.Mutex
-	deps            DaemonDeps
-	state           DaemonState
-	monitor         Monitor
-	surface         OverlaySurface
-	coordinateEntry *MainCoordinateEntryFSM
-	subgridEntry    *SubgridRefinementFSM
-	subgridGeometry SubgridGeometry
-	currentPoint    Point
-	havePoint       bool
-	keyboardCancel  context.CancelFunc
-	pendingLeft     *pendingClick
-	clickSerial     int64
+	mu               sync.Mutex
+	deps             DaemonDeps
+	state            DaemonState
+	monitor          Monitor
+	surface          OverlaySurface
+	coordinateEntry  *MainCoordinateEntryFSM
+	subgridNavigator *SubgridNavigationFSM
+	subgridGeometry  SubgridGeometry
+	currentPoint     Point
+	havePoint        bool
+	keyboardCancel   context.CancelFunc
+	pendingLeft      *pendingClick
+	clickSerial      int64
 }
 
 type pendingClick struct {
@@ -205,8 +205,8 @@ func (d *DaemonController) activeOverlayRerenderer() SurfaceRerenderFunc {
 }
 
 func (d *DaemonController) renderActiveOverlayBufferLocked(surfaceConfig SurfaceConfig) (ARGBBuffer, error) {
-	if d.subgridEntry != nil {
-		return d.renderSubgridBufferLocked(surfaceConfig)
+	if d.subgridNavigator != nil {
+		return d.renderSelectedCellBufferLocked(surfaceConfig)
 	}
 	return d.renderMainGridBufferLocked(surfaceConfig)
 }
@@ -251,29 +251,19 @@ func (d *DaemonController) renderMainGridBufferLocked(surfaceConfig SurfaceConfi
 	return buffer, nil
 }
 
-func (d *DaemonController) renderSubgridBufferLocked(surfaceConfig SurfaceConfig) (ARGBBuffer, error) {
+func (d *DaemonController) renderSelectedCellBufferLocked(surfaceConfig SurfaceConfig) (ARGBBuffer, error) {
 	config := DefaultConfig()
 	if d.deps.Config != nil {
 		config = *d.deps.Config
-	}
-	atlas := d.deps.FontAtlas
-	if atlas == nil {
-		var err error
-		atlas, err = NewFontAtlasFromConfig(config)
-		if err != nil {
-			return ARGBBuffer{}, err
-		}
-		d.deps.FontAtlas = atlas
 	}
 
 	buffer, err := NewARGBBuffer(surfaceConfig.Width, surfaceConfig.Height)
 	if err != nil {
 		return ARGBBuffer{}, err
 	}
-	if err := RenderSubgridOverlay(buffer, SubgridRenderOptions{
-		Geometry:   d.subgridGeometry,
+	if err := RenderSelectedCellOverlay(buffer, SelectedCellRenderOptions{
+		Cell:       d.subgridGeometry.MainCell,
 		Appearance: config.Appearance,
-		FontAtlas:  atlas,
 	}); err != nil {
 		return ARGBBuffer{}, err
 	}
@@ -374,24 +364,23 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 		return nil
 	}
 
-	if d.subgridEntry != nil {
-		result := d.subgridEntry.HandleToken(token)
-		if !result.Changed && result.Committed == nil {
+	if d.subgridNavigator != nil {
+		result := d.subgridNavigator.HandleToken(token)
+		if !result.Changed {
 			d.mu.Unlock()
 			return nil
 		}
-		if result.Changed {
-			if err := d.renderActiveOverlayLocked(ctx); err != nil {
-				d.mu.Unlock()
-				return err
-			}
+		if err := d.movePointerLocked(ctx, result.Point); err != nil {
+			d.mu.Unlock()
+			return err
 		}
-		if result.Committed != nil {
-			if err := d.commitSubgridRefinementLocked(ctx, *result.Committed); err != nil {
-				d.mu.Unlock()
-				return err
-			}
-		}
+		d.deps.Trace.Record("fsm", "subgrid_navigated", map[string]any{
+			"direction": string(result.Direction),
+			"column":    result.Column,
+			"row":       result.Row,
+			"x":         result.Point.X,
+			"y":         result.Point.Y,
+		})
 		d.mu.Unlock()
 		return nil
 	}
@@ -470,17 +459,6 @@ func (d *DaemonController) handleRightClickLocked(ctx context.Context) error {
 func (d *DaemonController) prepareClickPointLocked(ctx context.Context) (Point, bool, error) {
 	if !d.havePoint {
 		return Point{}, false, nil
-	}
-	if d.subgridEntry != nil {
-		result := d.subgridEntry.HandleToken(KeyboardToken{
-			Kind:     KeyboardTokenCommand,
-			Commands: []KeyboardCommand{KeyboardCommandCommitPartial},
-		})
-		if result.Committed != nil {
-			if err := d.commitSubgridRefinementLocked(ctx, *result.Committed); err != nil {
-				return Point{}, false, err
-			}
-		}
 	}
 	if !d.havePoint {
 		return Point{}, false, nil
@@ -692,12 +670,12 @@ func (d *DaemonController) enterSubgridLocked(ctx context.Context, selected Main
 	}
 
 	d.subgridGeometry = geometry
-	d.subgridEntry = NewSubgridRefinementFSM(selected.Bounds, geometry.XCount, geometry.YCount)
-	d.deps.Trace.Record("fsm", "subgrid_shown", map[string]any{
-		"x":       geometry.Display.X,
-		"y":       geometry.Display.Y,
-		"width":   geometry.Display.Width,
-		"height":  geometry.Display.Height,
+	d.subgridNavigator = NewSubgridNavigationFSM(selected.Bounds, d.monitor.LocalRect(), geometry.XCount, geometry.YCount, selected.Center)
+	d.deps.Trace.Record("fsm", "cell_outline_shown", map[string]any{
+		"x":       selected.Bounds.X,
+		"y":       selected.Bounds.Y,
+		"width":   selected.Bounds.Width,
+		"height":  selected.Bounds.Height,
 		"x_count": geometry.XCount,
 		"y_count": geometry.YCount,
 	})
@@ -831,10 +809,10 @@ func (d *DaemonController) resetCoordinateEntryLocked() {
 		d.coordinateEntry.Reset()
 	}
 	d.coordinateEntry = nil
-	if d.subgridEntry != nil {
-		d.subgridEntry.Reset()
+	if d.subgridNavigator != nil {
+		d.subgridNavigator.Reset()
 	}
-	d.subgridEntry = nil
+	d.subgridNavigator = nil
 	d.subgridGeometry = SubgridGeometry{}
 	d.currentPoint = Point{}
 	d.havePoint = false

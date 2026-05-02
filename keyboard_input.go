@@ -84,6 +84,17 @@ var keySymInputAliases = map[KeySym][]KeySym{
 	"Return": {"KP_Enter"},
 }
 
+var subgridNavigationKeySyms = map[KeySym]struct{}{
+	"Left":     {},
+	"Down":     {},
+	"Up":       {},
+	"Right":    {},
+	"KP_Left":  {},
+	"KP_Down":  {},
+	"KP_Up":    {},
+	"KP_Right": {},
+}
+
 func keySymSatisfiesBinding(input KeySym, binding KeySym) bool {
 	if input == binding {
 		return true
@@ -125,6 +136,9 @@ func NewKeyboardInputMapper(config Config) (*KeyboardInputMapper, error) {
 		if len(binding.sequence) > 1 {
 			sequenceBindings = append(sequenceBindings, binding)
 		}
+	}
+	for keysym := range subgridNavigationKeySyms {
+		interesting[keysym] = struct{}{}
 	}
 	return &KeyboardInputMapper{
 		bindings:         bindings,

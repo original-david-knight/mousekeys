@@ -13,6 +13,10 @@ sudo install -Dm755 ./mousekeys /usr/local/bin/mousekeys
 
 The daemon is normally started as a persistent user service. The short-lived `mousekeys show` command sends an IPC request to that daemon and toggles the overlay.
 
+## Usage
+
+Run `mousekeys show` with your global Hyprland keybind. Type two letters to select a main-grid cell; the pointer moves to that cell center immediately, the main grid disappears, and only the selected-cell outline remains. Use Vim movement keys or arrow keys to move by hidden sub-cell steps: `H`/Left, `J`/Down, `K`/Up, and `L`/Right. Movement can continue outside the selected cell and clamps only at the focused monitor edges. Press `Return` for left click, `space` for right click, or `Escape` to exit without clicking.
+
 ## Hyprland Trigger Keybind
 
 Add the global trigger to your Hyprland config. This hotkey is not stored in `~/.config/mousekeys/config.toml`; Mouse Keys only handles the in-overlay keys after Hyprland runs `mousekeys show`.
@@ -112,7 +116,6 @@ subgrid_pixel_size = 5       # target pixel size per sub-cell
 left_click = "Return"
 right_click = "space"
 double_click = "Return Return"
-commit_partial = "Tab"
 exit = "Escape"
 backspace = "BackSpace"
 
