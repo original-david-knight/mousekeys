@@ -150,10 +150,11 @@ func hyprlandMonitorFixtures(monitors []Monitor) []map[string]any {
 }
 
 type fakeWaylandBackend struct {
-	mu      sync.Mutex
-	outputs []Monitor
-	events  []fakeWaylandEvent
-	nextID  int
+	mu       sync.Mutex
+	outputs  []Monitor
+	events   []fakeWaylandEvent
+	nextID   int
+	observer fakeEventObserver
 }
 
 type fakeWaylandEvent struct {
@@ -179,17 +180,20 @@ func (f *fakeWaylandBackend) Outputs(context.Context) ([]Monitor, error) {
 
 func (f *fakeWaylandBackend) CreateSurface(_ context.Context, monitor Monitor) (OverlaySurface, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.nextID++
 	id := fmt.Sprintf("surface-%d", f.nextID)
-	f.events = append(f.events, fakeWaylandEvent{
+	event := fakeWaylandEvent{
 		Kind:       "surface_create",
 		SurfaceID:  id,
 		OutputName: monitor.Name,
 		Width:      monitor.Width,
 		Height:     monitor.Height,
 		Scale:      monitor.Scale,
-	})
+	}
+	f.events = append(f.events, event)
+	observer := f.observer
+	f.mu.Unlock()
+	observeFakeEvent(observer, "wayland", event.Kind, fakeWaylandEventFields(event))
 	return &fakeOverlaySurface{backend: f, id: id, closed: make(chan struct{})}, nil
 }
 
@@ -211,8 +215,10 @@ func (f *fakeWaylandBackend) Count(kind string) int {
 
 func (f *fakeWaylandBackend) record(event fakeWaylandEvent) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.events = append(f.events, event)
+	observer := f.observer
+	f.mu.Unlock()
+	observeFakeEvent(observer, "wayland", event.Kind, fakeWaylandEventFields(event))
 }
 
 type fakeOverlaySurface struct {
@@ -353,6 +359,7 @@ func (s *fakeOverlaySurface) renderBufferForConfig(config SurfaceConfig) (ARGBBu
 type fakeRendererSink struct {
 	mu            sync.Mutex
 	presentations []fakeRenderPresentation
+	observer      fakeEventObserver
 }
 
 type fakeRenderPresentation struct {
@@ -374,13 +381,20 @@ func (f *fakeRendererSink) Present(_ context.Context, surfaceID string, buffer A
 	}
 
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.presentations = append(f.presentations, fakeRenderPresentation{
 		SurfaceID: surfaceID,
 		Width:     buffer.Width,
 		Height:    buffer.Height,
 		Hash:      hash,
 		Snapshot:  append([]byte(nil), snapshot...),
+	})
+	observer := f.observer
+	f.mu.Unlock()
+	observeFakeEvent(observer, "renderer", "present", map[string]any{
+		"surface_id": surfaceID,
+		"width":      buffer.Width,
+		"height":     buffer.Height,
+		"hash":       hash,
 	})
 	return nil
 }
@@ -399,6 +413,7 @@ type virtualPointerRecorder struct {
 	current     PointerMotion
 	haveCurrent bool
 	events      []recordedPointerEvent
+	observer    fakeEventObserver
 }
 
 type recordedPointerEvent struct {
@@ -562,10 +577,12 @@ func (r *virtualPointerRecorder) ClickCount(groupID string, button PointerButton
 
 func (r *virtualPointerRecorder) record(event recordedPointerEvent) {
 	r.events = append(r.events, event)
+	observeFakeEvent(r.observer, "pointer", event.Kind, recordedPointerEventFields(event))
 }
 
 type fakeKeyboardEventSource struct {
-	ch chan KeyboardEvent
+	ch       chan KeyboardEvent
+	observer fakeEventObserver
 }
 
 func newFakeKeyboardEventSource(buffer int) *fakeKeyboardEventSource {
@@ -577,6 +594,13 @@ func (f *fakeKeyboardEventSource) Events(context.Context) (<-chan KeyboardEvent,
 }
 
 func (f *fakeKeyboardEventSource) Send(event KeyboardEvent) {
+	observeFakeEvent(f.observer, "keyboard", "send", map[string]any{
+		"kind":    string(event.Kind),
+		"key":     event.Key,
+		"pressed": event.Pressed,
+		"repeat":  event.Repeat,
+		"time":    event.Time.UTC().Format(time.RFC3339Nano),
+	})
 	f.ch <- event
 }
 

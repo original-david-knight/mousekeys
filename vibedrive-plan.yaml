@@ -669,7 +669,7 @@ tasks:
         coordinates, monitor/output names, click counts, overlay show/hide counts,
         and relevant renderer snapshot hashes in failure output so an unattended
         agent can diagnose regressions.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - click-commit-actions
