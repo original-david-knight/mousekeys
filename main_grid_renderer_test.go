@@ -173,6 +173,49 @@ func TestRenderMainGridOverlayUsesAppearanceConfigAndHUDString(t *testing.T) {
 	}
 }
 
+func TestRenderMainGridOverlayDimsNonSelectedColumns(t *testing.T) {
+	config := DefaultConfig()
+	atlas, err := NewFontAtlasFromConfig(config)
+	if err != nil {
+		t.Fatalf("font atlas: %v", err)
+	}
+	buffer, err := NewARGBBuffer(260, 260)
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+
+	selected := 12
+	if err := RenderMainGridOverlay(buffer, MainGridRenderOptions{
+		GridSize:       config.Grid.Size,
+		Appearance:     config.Appearance,
+		FontAtlas:      atlas,
+		HUD:            "M_",
+		SelectedColumn: &selected,
+	}); err != nil {
+		t.Fatalf("render selected-column main grid: %v", err)
+	}
+
+	selectedX0, selectedX1, err := axisSegment(buffer.Width, config.Grid.Size, selected)
+	if err != nil {
+		t.Fatalf("selected segment: %v", err)
+	}
+	dimmedX0, dimmedX1, err := axisSegment(buffer.Width, config.Grid.Size, selected-1)
+	if err != nil {
+		t.Fatalf("dimmed segment: %v", err)
+	}
+	y0, y1, err := axisSegment(buffer.Height, config.Grid.Size, 13)
+	if err != nil {
+		t.Fatalf("middle row segment: %v", err)
+	}
+
+	if got, want := argbAt(buffer, centeredInSpan(selectedX0, selectedX1, 1), centeredInSpan(y0, y1, 1)), uint32(0x303a7afe); got != want {
+		t.Fatalf("selected column interior pixel = %#x, want selected highlight %#x", got, want)
+	}
+	if got, want := argbAt(buffer, centeredInSpan(dimmedX0, dimmedX1, 1), centeredInSpan(y0, y1, 1)), uint32(0x70000000); got != want {
+		t.Fatalf("dimmed column interior pixel = %#x, want dim overlay %#x", got, want)
+	}
+}
+
 func TestRenderMainGridOverlayClipsLabelsToEdgeCells(t *testing.T) {
 	config := DefaultConfig()
 	atlas, err := NewFontAtlasFromConfig(config)

@@ -11,10 +11,11 @@ const (
 )
 
 type MainGridRenderOptions struct {
-	GridSize   int
-	Appearance AppearanceConfig
-	FontAtlas  *FontAtlas
-	HUD        string
+	GridSize       int
+	Appearance     AppearanceConfig
+	FontAtlas      *FontAtlas
+	HUD            string
+	SelectedColumn *int
 }
 
 func RenderMainGridOverlay(buffer ARGBBuffer, options MainGridRenderOptions) error {
@@ -28,10 +29,12 @@ func RenderMainGridOverlay(buffer ARGBBuffer, options MainGridRenderOptions) err
 	}
 
 	clearARGBBuffer(buffer)
+	drawMainGridColumnFocus(buffer, options)
 	drawMainGridLines(buffer, options.GridSize, options.Appearance)
 	if err := drawMainGridEdgeLabels(buffer, options); err != nil {
 		return err
 	}
+	dimMainGridNonSelectedColumns(buffer, options)
 	if err := drawMainGridHUD(buffer, options); err != nil {
 		return err
 	}
@@ -62,6 +65,9 @@ func normalizeMainGridRenderOptions(options MainGridRenderOptions) (MainGridRend
 	if options.Appearance.LabelFontSize < 1 {
 		return MainGridRenderOptions{}, fmt.Errorf("appearance.label_font_size must be positive, got %d", options.Appearance.LabelFontSize)
 	}
+	if options.SelectedColumn != nil && (*options.SelectedColumn < 0 || *options.SelectedColumn >= options.GridSize) {
+		return MainGridRenderOptions{}, fmt.Errorf("selected main grid column out of range: col=%d size=%d", *options.SelectedColumn, options.GridSize)
+	}
 
 	if options.FontAtlas == nil {
 		atlas, err := NewFontAtlas(FontAtlasOptions{LabelFontSize: options.Appearance.LabelFontSize})
@@ -74,6 +80,37 @@ func normalizeMainGridRenderOptions(options MainGridRenderOptions) (MainGridRend
 	}
 
 	return options, nil
+}
+
+func drawMainGridColumnFocus(buffer ARGBBuffer, options MainGridRenderOptions) {
+	if options.SelectedColumn == nil {
+		return
+	}
+
+	selected := *options.SelectedColumn
+	x0, x1, err := axisSegment(buffer.Width, options.GridSize, selected)
+	if err != nil {
+		return
+	}
+	blendRect(buffer, Rect{X: x0, Y: 0, Width: x1 - x0, Height: buffer.Height}, 0x303a7afe)
+}
+
+func dimMainGridNonSelectedColumns(buffer ARGBBuffer, options MainGridRenderOptions) {
+	if options.SelectedColumn == nil {
+		return
+	}
+
+	selected := *options.SelectedColumn
+	for col := 0; col < options.GridSize; col++ {
+		if col == selected {
+			continue
+		}
+		x0, x1, err := axisSegment(buffer.Width, options.GridSize, col)
+		if err != nil {
+			return
+		}
+		blendRect(buffer, Rect{X: x0, Y: 0, Width: x1 - x0, Height: buffer.Height}, 0x70000000)
+	}
 }
 
 func clearARGBBuffer(buffer ARGBBuffer) {

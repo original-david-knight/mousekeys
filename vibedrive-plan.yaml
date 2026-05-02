@@ -472,7 +472,7 @@ tasks:
 
         Hook into the keyboard input from the layer-shell surface and the IPC
         layer so "show"-toggle and "hide" both reset state cleanly.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - main-grid-render
