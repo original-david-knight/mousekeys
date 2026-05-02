@@ -117,16 +117,35 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 		}
 	}
 
+	appConfig := DefaultConfig()
+	if d.deps.Config != nil {
+		appConfig = *d.deps.Config
+	}
+	d.resetCoordinateEntryLocked()
+	d.coordinateEntry = NewMainCoordinateEntryFSM(appConfig.Grid.Size, monitor)
+	if err := d.showOverlaySurfaceLocked(ctx, monitor); err != nil {
+		d.clearOverlayStateLocked()
+		return err
+	}
+	return nil
+}
+
+func (d *DaemonController) showOverlaySurfaceLocked(ctx context.Context, monitor Monitor) (err error) {
 	surface, err := d.deps.Overlay.CreateSurface(ctx, monitor)
 	if err != nil {
 		return err
 	}
+	cleanup := true
 	defer func() {
-		if err != nil {
-			d.stopKeyboardInputLocked()
-			d.resetCoordinateEntryLocked()
-			_ = surface.Destroy(ctx)
+		if !cleanup {
+			return
 		}
+		d.stopKeyboardInputLocked()
+		if d.surface == surface {
+			d.surface = nil
+			d.state = DaemonStateInactive
+		}
+		_ = surface.Destroy(contextWithoutCancel(ctx))
 	}()
 
 	config := SurfaceConfig{
@@ -141,18 +160,16 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 	if err := surface.GrabKeyboard(ctx); err != nil {
 		return err
 	}
+	if rerenderer, ok := surface.(OverlaySurfaceRerenderer); ok {
+		rerenderer.SetRerenderer(d.activeOverlayRerenderer())
+	}
+	d.monitor = monitor
+	d.surface = surface
+	d.state = DaemonStateOverlayShown
 	if err := d.startKeyboardInputLocked(ctx); err != nil {
 		return err
 	}
 
-	appConfig := DefaultConfig()
-	if d.deps.Config != nil {
-		appConfig = *d.deps.Config
-	}
-	d.coordinateEntry = NewMainCoordinateEntryFSM(appConfig.Grid.Size, monitor)
-	if rerenderer, ok := surface.(OverlaySurfaceRerenderer); ok {
-		rerenderer.SetRerenderer(d.activeOverlayRerenderer())
-	}
 	buffer, err := d.renderActiveOverlayBufferLocked(config)
 	if err != nil {
 		return err
@@ -166,9 +183,7 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 		return err
 	}
 
-	d.monitor = monitor
-	d.surface = surface
-	d.state = DaemonStateOverlayShown
+	cleanup = false
 	d.watchSurfaceClosed(surface)
 	d.deps.Trace.Record("state", "overlay_shown", map[string]any{
 		"output": monitor.Name,
@@ -478,7 +493,7 @@ func (d *DaemonController) leftClickCanBecomeDoubleClickLocked(keysym KeySym) bo
 		return false
 	}
 	sequence := d.configLocked().Keybinds.DoubleClick
-	return len(sequence) == 2 && sequence[0] == keysym
+	return len(sequence) == 2 && keySymSatisfiesBinding(keysym, sequence[0])
 }
 
 func (d *DaemonController) tokenCompletesPendingDoubleClickLocked(token KeyboardToken) bool {
@@ -490,7 +505,9 @@ func (d *DaemonController) tokenCompletesPendingDoubleClickLocked(token Keyboard
 		return false
 	}
 	sequence := d.configLocked().Keybinds.DoubleClick
-	return len(sequence) == 2 && sequence[0] == d.pendingLeft.firstKey && sequence[1] == keysym
+	return len(sequence) == 2 &&
+		keySymSatisfiesBinding(d.pendingLeft.firstKey, sequence[0]) &&
+		keySymSatisfiesBinding(keysym, sequence[1])
 }
 
 func (d *DaemonController) tokenKeySymLocked(token KeyboardToken) KeySym {
@@ -569,12 +586,16 @@ func (d *DaemonController) finishPendingDoubleClickLocked(ctx context.Context) e
 }
 
 func (d *DaemonController) emitClickAndApplyBehaviorLocked(ctx context.Context, p Point, button PointerButton, clickCount int, groupID string) error {
+	clickCtx := contextWithoutCancel(ctx)
+	if err := d.unmapOverlayForClickLocked(clickCtx); err != nil {
+		return err
+	}
 	if clickCount == 2 {
-		if err := EmitPointerDoubleClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
+		if err := EmitPointerDoubleClick(clickCtx, d.deps.Pointer, d.monitor, p, button); err != nil {
 			return err
 		}
 	} else {
-		if err := EmitPointerClick(ctx, d.deps.Pointer, d.monitor, p, button); err != nil {
+		if err := EmitPointerClick(clickCtx, d.deps.Pointer, d.monitor, p, button); err != nil {
 			return err
 		}
 	}
@@ -586,18 +607,32 @@ func (d *DaemonController) emitClickAndApplyBehaviorLocked(ctx context.Context, 
 		"click_count": clickCount,
 		"group_id":    groupID,
 	})
-	return d.applyPostClickBehaviorLocked(ctx)
+	return d.applyPostClickBehaviorLocked(clickCtx)
 }
 
 func (d *DaemonController) applyPostClickBehaviorLocked(ctx context.Context) error {
 	if !d.configLocked().Behavior.StayActive {
-		return d.hideLocked(ctx)
+		d.clearOverlayStateLocked()
+		d.deps.Trace.Record("state", "overlay_hidden", nil)
+		return nil
 	}
 	config := d.configLocked()
+	monitor := d.monitor
 	d.resetCoordinateEntryLocked()
-	d.coordinateEntry = NewMainCoordinateEntryFSM(config.Grid.Size, d.monitor)
+	d.coordinateEntry = NewMainCoordinateEntryFSM(config.Grid.Size, monitor)
 	d.deps.Trace.Record("state", "stay_active_reset", nil)
-	return d.renderActiveMainGridLocked(ctx)
+	return d.showOverlaySurfaceLocked(ctx, monitor)
+}
+
+func (d *DaemonController) unmapOverlayForClickLocked(ctx context.Context) error {
+	d.stopKeyboardInputLocked()
+	surface := d.surface
+	if surface == nil {
+		return nil
+	}
+	d.surface = nil
+	d.deps.Trace.Record("state", "overlay_unmapped_for_click", nil)
+	return surface.Destroy(ctx)
 }
 
 func (d *DaemonController) cancelPendingLeftClickByID(id int64) {
@@ -884,4 +919,11 @@ func overlaySurfaceClosed(surface OverlaySurface) bool {
 	default:
 		return false
 	}
+}
+
+func contextWithoutCancel(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }

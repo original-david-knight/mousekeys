@@ -16,6 +16,7 @@ const (
 	evdevKeyA         uint32 = 30
 	evdevKeyLeftShift uint32 = 42
 	evdevKeySpace     uint32 = 57
+	evdevKeyKPEnter   uint32 = 96
 )
 
 func TestXKBKeyboardSourceTranslatesRawKeymapEventsToTokens(t *testing.T) {
@@ -111,6 +112,24 @@ func TestXKBKeyboardSourceIgnoresReleasesAndRepeatsAndResetsOnLeaveDestroy(t *te
 	assertNoKeyboardToken(t, tokens)
 	raw.SendKey(evdevKeyReturn, true, now)
 	requireCommandToken(t, tokens, "Return", KeyboardCommandLeftClick)
+}
+
+func TestXKBKeyboardSourceMapsKeypadEnterToDefaultClickCommand(t *testing.T) {
+	raw := newFakeRawKeyboardEventSource(16)
+	source := NewXKBKeyboardEventSource(raw)
+	mapper, err := NewKeyboardInputMapper(DefaultConfig())
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+	tokens, err := mapper.Tokens(context.Background(), source)
+	if err != nil {
+		t.Fatalf("keyboard tokens: %v", err)
+	}
+
+	now := time.Date(2026, 5, 1, 13, 35, 0, 0, time.UTC)
+	raw.SendKeymap(defaultUSKeymapForTest(t))
+	raw.SendKey(evdevKeyKPEnter, true, now)
+	requireCommandToken(t, tokens, "KP_Enter", KeyboardCommandLeftClick)
 }
 
 func TestXKBKeyboardSourceEnterSeedsPressedKeys(t *testing.T) {

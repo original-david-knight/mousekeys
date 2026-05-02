@@ -80,10 +80,11 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		h.assertPointerButtonsAt(PointerButtonLeft, cell.Center(), 1)
 		h.assertLastPointerMotion(cell.Center())
 		h.assertTracePointerClick(PointerButtonLeft, 1, cell.Center())
+		h.assertTraceAfter("io", "pointer_click", "state", "overlay_unmapped_for_click")
 		h.assertTraceAfter("state", "stay_active_reset", "io", "pointer_click")
 		h.waitForLastRendererHash(acceptanceMainGridHash(t, h.focused, h.config, h.atlas, DefaultMainGridHUD, nil))
-		h.assertWaylandCount("surface_create", 1)
-		h.assertWaylandCount("destroy", 0)
+		h.assertWaylandCount("surface_create", 2)
+		h.assertWaylandCount("destroy", 1)
 	})
 
 	t.Run("Enter Enter double-click keeps the same committed cursor and does not reopen main grid between clicks", func(t *testing.T) {
@@ -110,10 +111,11 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 
 		h.assertPointerButtonsAt(PointerButtonLeft, cell.Center(), 2)
 		h.assertTracePointerClick(PointerButtonLeft, 2, cell.Center())
+		h.assertTraceAfter("io", "pointer_click", "state", "overlay_unmapped_for_click")
 		h.assertNoMainGridReopenBetweenFirstTwoLeftClicks(mainGridHash)
 		h.waitForLastRendererHash(mainGridHash)
-		h.assertWaylandCount("surface_create", 1)
-		h.assertWaylandCount("destroy", 0)
+		h.assertWaylandCount("surface_create", 2)
+		h.assertWaylandCount("destroy", 1)
 	})
 
 	t.Run("focused monitor targeting works with a non-zero virtual-layout origin", func(t *testing.T) {

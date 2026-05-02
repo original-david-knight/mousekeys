@@ -99,7 +99,7 @@ Mouse Keys creates its default config on first daemon start:
 ~/.config/mousekeys/config.toml
 ```
 
-The config is reloaded when the daemon restarts. There is no live config reload in v1. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`.
+The config is reloaded when the daemon restarts. There is no live config reload in v1. Key names use xkbcommon keysym names and are case-sensitive, for example `Return`, `space`, `Tab`, `Escape`, and `BackSpace`. The default `Return` binding also accepts keypad Enter (`KP_Enter`).
 
 Default `config.toml`:
 

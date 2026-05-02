@@ -80,6 +80,28 @@ type keyboardBinding struct {
 	sequence KeySequence
 }
 
+var keySymInputAliases = map[KeySym][]KeySym{
+	"Return": {"KP_Enter"},
+}
+
+func keySymSatisfiesBinding(input KeySym, binding KeySym) bool {
+	if input == binding {
+		return true
+	}
+	for _, alias := range keySymInputAliases[binding] {
+		if input == alias {
+			return true
+		}
+	}
+	return false
+}
+
+func keySymAcceptedInputs(binding KeySym) []KeySym {
+	inputs := []KeySym{binding}
+	inputs = append(inputs, keySymInputAliases[binding]...)
+	return inputs
+}
+
 func NewKeyboardInputMapper(config Config) (*KeyboardInputMapper, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -96,7 +118,9 @@ func NewKeyboardInputMapper(config Config) (*KeyboardInputMapper, error) {
 	var sequenceBindings []keyboardBinding
 	for _, binding := range bindings {
 		for _, sym := range binding.sequence {
-			interesting[sym] = struct{}{}
+			for _, input := range keySymAcceptedInputs(sym) {
+				interesting[input] = struct{}{}
+			}
 		}
 		if len(binding.sequence) > 1 {
 			sequenceBindings = append(sequenceBindings, binding)
@@ -196,6 +220,13 @@ func (m *KeyboardInputMapper) commandsForKey(keysym KeySym) []KeyboardCommand {
 			commands = append(commands, binding.command)
 		}
 	}
+	if len(commands) == 0 {
+		for _, binding := range m.bindings {
+			if len(binding.sequence) == 1 && keySymSatisfiesBinding(keysym, binding.sequence[0]) {
+				commands = append(commands, binding.command)
+			}
+		}
+	}
 	sort.Slice(commands, func(i, j int) bool {
 		return commands[i] < commands[j]
 	})
@@ -229,13 +260,13 @@ func (m *keyboardSequenceMatcher) Apply(token *KeyboardToken) {
 		}
 
 		switch {
-		case binding.sequence[progress] == token.KeySym:
+		case keySymSatisfiesBinding(token.KeySym, binding.sequence[progress]):
 			progress++
 			if progress == len(binding.sequence) {
 				token.Commands = appendKeyboardCommand(token.Commands, binding.command)
 				progress = 0
 			}
-		case binding.sequence[0] == token.KeySym:
+		case keySymSatisfiesBinding(token.KeySym, binding.sequence[0]):
 			progress = 1
 		default:
 			progress = 0

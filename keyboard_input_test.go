@@ -50,6 +50,14 @@ func TestKeyboardInputMapperLettersCommandsReleasesAndRepeats(t *testing.T) {
 			wantToken: true,
 		},
 		{
+			name:      "keypad enter satisfies Return binding",
+			event:     KeyboardEvent{Key: "KP_Enter", Pressed: true},
+			wantKind:  KeyboardTokenCommand,
+			wantSym:   "KP_Enter",
+			wantCmd:   KeyboardCommandRightClick,
+			wantToken: true,
+		},
+		{
 			name:      "lowercase xkbcommon space name",
 			event:     KeyboardEvent{Key: "space", Pressed: true},
 			wantKind:  KeyboardTokenCommand,
@@ -126,6 +134,50 @@ func TestKeyboardInputMapperDoesNotEmitDoubleClickSequenceCommand(t *testing.T) 
 	}
 	if !tokenHasCommand(token, KeyboardCommandLeftClick) {
 		t.Fatalf("Return token lacks left_click command: %+v", token.Commands)
+	}
+}
+
+func TestKeyboardInputMapperTreatsKeypadEnterAsReturnForDefaultClickBindings(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mapper, err := NewKeyboardInputMapper(DefaultConfig())
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+	keyboard := newFakeKeyboardEventSource(4)
+	tokens, err := mapper.Tokens(ctx, keyboard)
+	if err != nil {
+		t.Fatalf("keyboard tokens: %v", err)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "KP_Enter", Pressed: true})
+	first := receiveKeyboardToken(t, tokens)
+	if first.KeySym != "KP_Enter" || !tokenHasCommand(first, KeyboardCommandLeftClick) || tokenHasCommand(first, KeyboardCommandDoubleClick) {
+		t.Fatalf("first KP_Enter token = %+v, want left click only", first)
+	}
+
+	keyboard.Send(KeyboardEvent{Key: "KP_Enter", Pressed: true})
+	second := receiveKeyboardToken(t, tokens)
+	if second.KeySym != "KP_Enter" || !tokenHasCommand(second, KeyboardCommandLeftClick) || !tokenHasCommand(second, KeyboardCommandDoubleClick) {
+		t.Fatalf("second KP_Enter token = %+v, want left click and double click", second)
+	}
+}
+
+func TestKeyboardInputMapperPrefersExactKeypadEnterBinding(t *testing.T) {
+	config := DefaultConfig()
+	config.Keybinds.RightClick = mustParseKeySequence("KP_Enter")
+	mapper, err := NewKeyboardInputMapper(config)
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+
+	token, ok := mapper.Translate(KeyboardEvent{Key: "KP_Enter", Pressed: true})
+	if !ok {
+		t.Fatalf("KP_Enter did not produce a token")
+	}
+	if !tokenHasCommand(token, KeyboardCommandRightClick) || tokenHasCommand(token, KeyboardCommandLeftClick) {
+		t.Fatalf("KP_Enter commands = %+v, want exact right_click only", token.Commands)
 	}
 }
 

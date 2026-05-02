@@ -37,6 +37,23 @@ func TestDaemonLeftClickWaitsForTimeoutThenStaysActive(t *testing.T) {
 	}
 }
 
+func TestDaemonKeypadEnterUsesDefaultLeftClickTimeout(t *testing.T) {
+	ctx := context.Background()
+	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
+	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
+
+	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle keypad Enter: %v", err)
+	}
+	if got := countPointerClicks(pointer, PointerButtonLeft); got != 0 {
+		t.Fatalf("left clicks immediately after keypad Enter = %d, want 0", got)
+	}
+
+	clock.Advance(time.Duration(config.Behavior.DoubleClickTimeoutMS) * time.Millisecond)
+	waitForPointerClickCount(t, pointer, PointerButtonLeft, 1)
+	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
+}
+
 func TestDaemonDoubleClickDoesNotReopenMainGridBetweenClicks(t *testing.T) {
 	ctx := context.Background()
 	controller, _, pointer, renderer, wayland, focused, config, atlas := newClickActionTestController(t, true)
@@ -67,6 +84,22 @@ func TestDaemonDoubleClickDoesNotReopenMainGridBetweenClicks(t *testing.T) {
 		t.Fatalf("surface renders after double click = %d, want %d", got, beforeRenders+1)
 	}
 	assertLastRendererHashMatchesMainGrid(t, renderer, focused, config, atlas, DefaultMainGridHUD, nil)
+}
+
+func TestDaemonKeypadEnterCompletesDefaultDoubleClick(t *testing.T) {
+	ctx := context.Background()
+	controller, _, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
+	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
+
+	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle first keypad Enter: %v", err)
+	}
+	if err := controller.HandleKeyboardToken(ctx, commandToken("KP_Enter", KeyboardCommandLeftClick)); err != nil {
+		t.Fatalf("handle second keypad Enter: %v", err)
+	}
+
+	waitForPointerClickCount(t, pointer, PointerButtonLeft, 2)
+	assertLastPointerMotion(t, pointer, focused, mainCell.Center())
 }
 
 func TestDaemonRightClickAndStayActiveFalseExitAfterClick(t *testing.T) {
