@@ -622,7 +622,7 @@ tasks:
         multi-monitor environments to validate, and protects two distinct PRD
         acceptance gates (non-zero origin and scaled monitor) — broader risk
         surface than any single earlier impl task.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wlr-virtual-pointer

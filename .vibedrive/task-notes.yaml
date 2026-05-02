@@ -41,3 +41,6 @@ tasks:
     - id: click-commit-actions
       status: done
       notes: Implemented pending left-click timer, click auto-commit for partial sub-grid X input, stay-active reset/hide, and Esc cancellation. Tests use the fake clock; double-click completion only runs from a pending first click so stale key sequences cannot trigger later double-clicks.
+    - id: multi-output-and-scaling
+      status: done
+      notes: 'Added explicit scaled/offset transform tests: with-output stays local, fallback adds virtual origin, and scaled grid rendering is pinned by snapshot plus logical-to-buffer scaling checks. Optional real Hyprland multi-monitor/scaled verification is documented as non-blocking; multi-monitor spanning remains out of scope. go build/test/vet pass.'
