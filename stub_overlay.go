@@ -6,6 +6,7 @@ import (
 )
 
 func NewStubDaemonController(trace TraceRecorder) *DaemonController {
+	config := DefaultConfig()
 	monitor := Monitor{
 		Name:    "stub-output",
 		Width:   1920,
@@ -16,24 +17,27 @@ func NewStubDaemonController(trace TraceRecorder) *DaemonController {
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: staticFocusedMonitorLookup{monitor: monitor},
 		Overlay:       stubOverlayBackend{},
+		Config:        &config,
 		Trace:         trace,
 	})
 }
 
-func NewHyprlandBackedStubDaemonController(trace TraceRecorder, atlas *FontAtlas) *DaemonController {
+func NewHyprlandBackedStubDaemonController(trace TraceRecorder, config Config, atlas *FontAtlas) *DaemonController {
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: NewHyprlandIPCClientFromEnv(),
 		Overlay:       stubOverlayBackend{},
+		Config:        &config,
 		FontAtlas:     atlas,
 		Trace:         trace,
 	})
 }
 
-func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, atlas *FontAtlas, wayland *WaylandClient) *DaemonController {
+func NewHyprlandBackedWaylandDaemonController(trace TraceRecorder, config Config, atlas *FontAtlas, wayland *WaylandClient) *DaemonController {
 	return NewDaemonController(DaemonDeps{
 		MonitorLookup: NewHyprlandIPCClientFromEnv(),
 		Overlay:       NewLayerShellOverlayBackend(wayland),
 		Keyboard:      NewXKBKeyboardEventSource(NewWaylandKeyboardRawEventSource(wayland)),
+		Config:        &config,
 		FontAtlas:     atlas,
 		Pointer:       NewWaylandVirtualPointerSynthesizer(wayland, systemClock{}),
 		Trace:         trace,

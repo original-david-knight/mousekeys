@@ -169,6 +169,7 @@ type layerShellSurface struct {
 	mu                sync.Mutex
 	config            SurfaceConfig
 	bufferScale       int
+	rerenderer        SurfaceRerenderFunc
 	current           *waylandSHMBuffer
 	retired           map[*waylandSHMBuffer]struct{}
 	keyboardExclusive bool
@@ -184,6 +185,15 @@ func (s *layerShellSurface) ID() string {
 		return ""
 	}
 	return s.id
+}
+
+func (s *layerShellSurface) SetRerenderer(rerenderer SurfaceRerenderFunc) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rerenderer = rerenderer
 }
 
 func (s *layerShellSurface) Configure(ctx context.Context, config SurfaceConfig) error {
@@ -422,7 +432,7 @@ func (s *layerShellSurface) runEventLoop() {
 			switch event.kind {
 			case layerShellSurfaceEventConfigure:
 				if err := s.ackConfigure(event); err == nil {
-					_ = s.renderPlaceholderForCurrentConfig(s.ctx)
+					_ = s.renderForCurrentConfig(s.ctx)
 				}
 			case layerShellSurfaceEventOutputChanged:
 				_ = s.applyOutputChange(s.ctx, event.monitor)
@@ -462,18 +472,28 @@ func (s *layerShellSurface) applyOutputChange(ctx context.Context, monitor Monit
 	s.bufferScale = waylandBufferScale(monitor.Scale)
 	s.mu.Unlock()
 
-	return s.renderPlaceholderForCurrentConfig(ctx)
+	return s.renderForCurrentConfig(ctx)
 }
 
-func (s *layerShellSurface) renderPlaceholderForCurrentConfig(ctx context.Context) error {
+func (s *layerShellSurface) renderForCurrentConfig(ctx context.Context) error {
 	s.mu.Lock()
 	config := s.config
+	rerenderer := s.rerenderer
 	s.mu.Unlock()
-	buffer, err := NewARGBBuffer(config.Width, config.Height)
+
+	var buffer ARGBBuffer
+	var err error
+	if rerenderer != nil {
+		buffer, err = rerenderer(config)
+	} else {
+		buffer, err = NewARGBBuffer(config.Width, config.Height)
+		if err == nil {
+			RenderPlaceholderOverlay(buffer)
+		}
+	}
 	if err != nil {
 		return err
 	}
-	RenderPlaceholderOverlay(buffer)
 	return s.renderBuffer(ctx, buffer)
 }
 

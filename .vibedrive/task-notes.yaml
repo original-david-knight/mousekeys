@@ -29,3 +29,6 @@ tasks:
     - id: wlr-virtual-pointer
       status: done
       notes: Added direct wlr-virtual-pointer synthesis. The registry must accept manager v1 for fallback; v2 uses create_virtual_pointer_with_output. Fallback normalizes focused-output local coords by virtual layout bounds so non-zero and negative monitor origins are covered by tests.
+    - id: main-grid-render
+      status: done
+      notes: Implemented config-driven main-grid rendering with deterministic geometry, clipped four-edge labels, caller-supplied HUD text, and rerender on surface configure. Review cleanup removed dead compatibility helpers; live HUD input remains for coordinate-entry-fsm.

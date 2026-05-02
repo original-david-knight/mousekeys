@@ -219,6 +219,7 @@ type fakeOverlaySurface struct {
 	backend      *fakeWaylandBackend
 	id           string
 	config       SurfaceConfig
+	rerenderer   SurfaceRerenderFunc
 	bufferActive bool
 	closed       chan struct{}
 	closeOnce    sync.Once
@@ -226,6 +227,10 @@ type fakeOverlaySurface struct {
 
 func (s *fakeOverlaySurface) ID() string {
 	return s.id
+}
+
+func (s *fakeOverlaySurface) SetRerenderer(rerenderer SurfaceRerenderFunc) {
+	s.rerenderer = rerenderer
 }
 
 func (s *fakeOverlaySurface) Configure(_ context.Context, config SurfaceConfig) error {
@@ -305,11 +310,10 @@ func (s *fakeOverlaySurface) SimulateConfigure(ctx context.Context, width int, h
 	if err := s.Configure(ctx, config); err != nil {
 		return err
 	}
-	buffer, err := NewARGBBuffer(width, height)
+	buffer, err := s.renderBufferForConfig(config)
 	if err != nil {
 		return err
 	}
-	RenderPlaceholderOverlay(buffer)
 	return s.Render(ctx, buffer)
 }
 
@@ -327,12 +331,23 @@ func (s *fakeOverlaySurface) SimulateScale(ctx context.Context, scale float64) e
 	if err := s.Configure(ctx, config); err != nil {
 		return err
 	}
-	buffer, err := NewARGBBuffer(config.Width, config.Height)
+	buffer, err := s.renderBufferForConfig(config)
 	if err != nil {
 		return err
 	}
-	RenderPlaceholderOverlay(buffer)
 	return s.Render(ctx, buffer)
+}
+
+func (s *fakeOverlaySurface) renderBufferForConfig(config SurfaceConfig) (ARGBBuffer, error) {
+	if s.rerenderer != nil {
+		return s.rerenderer(config)
+	}
+	buffer, err := NewARGBBuffer(config.Width, config.Height)
+	if err != nil {
+		return ARGBBuffer{}, err
+	}
+	RenderPlaceholderOverlay(buffer)
+	return buffer, nil
 }
 
 type fakeRendererSink struct {

@@ -430,7 +430,7 @@ tasks:
           from the caller; the FSM in coordinate-entry-fsm wires it to live input.
         - Grid geometry is calculated in monitor-local logical pixels. Wayland
           buffer scaling handles physical pixel density.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wlr-layer-shell-overlay

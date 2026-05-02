@@ -18,6 +18,7 @@ type DaemonDeps struct {
 	Overlay       WaylandOverlayBackend
 	Keyboard      KeyboardEventSource
 	Renderer      RendererBufferSink
+	Config        *Config
 	FontAtlas     *FontAtlas
 	Pointer       PointerSynthesizer
 	Clock         Clock
@@ -39,6 +40,10 @@ func NewDaemonController(deps DaemonDeps) *DaemonController {
 	if deps.Trace == nil {
 		deps.Trace = noopTraceRecorder{}
 	}
+	if deps.Config == nil {
+		config := DefaultConfig()
+		deps.Config = &config
+	}
 	return &DaemonController{
 		deps:  deps,
 		state: DaemonStateInactive,
@@ -52,13 +57,6 @@ func (d *DaemonController) State() DaemonState {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.state
-}
-
-func (d *DaemonController) FontAtlas() *FontAtlas {
-	if d == nil {
-		return nil
-	}
-	return d.deps.FontAtlas
 }
 
 func (d *DaemonController) Show(ctx context.Context) (err error) {
@@ -122,11 +120,17 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 		return err
 	}
 
-	buffer, err := NewARGBBuffer(monitor.Width, monitor.Height)
+	renderGrid, err := d.mainGridRendererLocked(DefaultMainGridHUD)
 	if err != nil {
 		return err
 	}
-	RenderPlaceholderOverlay(buffer)
+	if rerenderer, ok := surface.(OverlaySurfaceRerenderer); ok {
+		rerenderer.SetRerenderer(renderGrid)
+	}
+	buffer, err := renderGrid(config)
+	if err != nil {
+		return err
+	}
 	if d.deps.Renderer != nil {
 		if err := d.deps.Renderer.Present(ctx, surface.ID(), buffer); err != nil {
 			return err
@@ -149,6 +153,38 @@ func (d *DaemonController) Show(ctx context.Context) (err error) {
 		"y":      monitor.Y,
 	})
 	return nil
+}
+
+func (d *DaemonController) mainGridRendererLocked(hud string) (SurfaceRerenderFunc, error) {
+	config := DefaultConfig()
+	if d.deps.Config != nil {
+		config = *d.deps.Config
+	}
+	atlas := d.deps.FontAtlas
+	if atlas == nil {
+		var err error
+		atlas, err = NewFontAtlasFromConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		d.deps.FontAtlas = atlas
+	}
+
+	return func(surfaceConfig SurfaceConfig) (ARGBBuffer, error) {
+		buffer, err := NewARGBBuffer(surfaceConfig.Width, surfaceConfig.Height)
+		if err != nil {
+			return ARGBBuffer{}, err
+		}
+		if err := RenderMainGridOverlay(buffer, MainGridRenderOptions{
+			GridSize:   config.Grid.Size,
+			Appearance: config.Appearance,
+			FontAtlas:  atlas,
+			HUD:        hud,
+		}); err != nil {
+			return ARGBBuffer{}, err
+		}
+		return buffer, nil
+	}, nil
 }
 
 func (d *DaemonController) Hide(ctx context.Context) error {

@@ -64,6 +64,12 @@ type OverlaySurface interface {
 	Closed() <-chan struct{}
 }
 
+type SurfaceRerenderFunc func(SurfaceConfig) (ARGBBuffer, error)
+
+type OverlaySurfaceRerenderer interface {
+	SetRerenderer(SurfaceRerenderFunc)
+}
+
 type SurfaceConfig struct {
 	OutputName string
 	Width      int

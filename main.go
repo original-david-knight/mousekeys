@@ -118,7 +118,7 @@ func runDaemonCommand(args []string, log *logger) error {
 	})
 	log.Debug("daemon entering IPC loop", nil)
 
-	return runDaemonLoopWithTrace(ctx, log, trace, fontAtlas)
+	return runDaemonLoopWithTrace(ctx, log, trace, config, fontAtlas)
 }
 
 func runClientCommand(command string, args []string, log *logger) error {
@@ -155,14 +155,14 @@ func runClientCommand(command string, args []string, log *logger) error {
 	return nil
 }
 
-func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder, fontAtlas *FontAtlas) error {
+func runDaemonLoopWithTrace(ctx context.Context, log *logger, trace TraceRecorder, config Config, fontAtlas *FontAtlas) error {
 	wayland, err := OpenWaylandClientFromEnv(ctx)
 	if err != nil {
 		return err
 	}
 	defer wayland.Close()
 
-	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedWaylandDaemonController(trace, fontAtlas, wayland))
+	return runDaemonLoop(ctx, log, trace, NewHyprlandBackedWaylandDaemonController(trace, config, fontAtlas, wayland))
 }
 
 func runDaemonLoop(ctx context.Context, log *logger, trace TraceRecorder, controller *DaemonController) error {
