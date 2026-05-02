@@ -53,3 +53,6 @@ tasks:
     - id: docs-hyprland-and-install
       status: done
       notes: README-only docs update. Shipped mousekeys.service already uses /usr/bin/env mousekeys daemon with a Hyprland env ExecStartPre check; DefaultConfigTOML matches the PRD defaults.
+    - id: basic-flow-checkpoint
+      status: done
+      notes: 'go build ./..., go vet ./..., and go test ./... all passed. Headless smoke exercised the show -> M,K -> Enter flow: active overlay on HEADLESS-1 with 26x26 grid, 4 trigger-to-click keystrokes, pointer_click trace button=left count=1 output=HEADLESS-1 x=250 y=210 group_id=click-1 after left_click_pending timeout_ms=250, then stay_active_reset. No regressions or plan adjustments.'

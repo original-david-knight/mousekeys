@@ -793,7 +793,7 @@ tasks:
 
         Fix any regressions found before continuing. Capture any plan
         adjustments in the task notes.
-      status: todo
+      status: done
       workflow: checkpoint
       deps:
         - headless-prd-acceptance-suite
