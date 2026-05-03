@@ -91,6 +91,7 @@ func TestDaemonRunsUntilContextCancelled(t *testing.T) {
 	done := make(chan int, 1)
 	env := mapEnv(map[string]string{
 		"XDG_RUNTIME_DIR":             t.TempDir(),
+		"XDG_CONFIG_HOME":             t.TempDir(),
 		"WAYLAND_DISPLAY":             "wayland-1",
 		"HYPRLAND_INSTANCE_SIGNATURE": "test-signature",
 	})

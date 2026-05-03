@@ -23,6 +23,12 @@ func runDaemon(ctx context.Context, logger *slog.Logger, getenv getenvFunc) int 
 		return 1
 	}
 
+	loadedConfig, err := LoadConfig(getenv)
+	if err != nil {
+		logger.Error("daemon startup failed", "error", err)
+		return 1
+	}
+
 	build := currentBuildInfo()
 	logger.Info(
 		"daemon starting",
@@ -38,6 +44,14 @@ func runDaemon(ctx context.Context, logger *slog.Logger, getenv getenvFunc) int 
 		"wayland_display", session.WaylandDisplay,
 		"hyprland_instance_signature", session.HyprlandInstanceSignature,
 	)
+	logger.Info(
+		"configuration loaded",
+		"path", loadedConfig.Path,
+		"created", loadedConfig.Created,
+		"grid_size", loadedConfig.Config.Grid.Size,
+		"subgrid_pixel_size", loadedConfig.Config.Grid.SubgridPixelSize,
+		"double_click_timeout", loadedConfig.Config.DoubleClickTimeout(),
+	)
 	trace.Record(traceDaemonStart, map[string]any{
 		"version":                      build.Version,
 		"commit":                       build.Commit,
@@ -45,6 +59,8 @@ func runDaemon(ctx context.Context, logger *slog.Logger, getenv getenvFunc) int 
 		"wayland_display":              session.WaylandDisplay,
 		"hyprland_instance_signature":  session.HyprlandInstanceSignature,
 		"trace_enabled_by_environment": trace.Enabled(),
+		"config_path":                  loadedConfig.Path,
+		"config_created":               loadedConfig.Created,
 	})
 
 	<-ctx.Done()

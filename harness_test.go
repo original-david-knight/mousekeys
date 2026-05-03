@@ -180,6 +180,7 @@ func TestTraceRecorderFromEnvironment(t *testing.T) {
 	done := make(chan int, 1)
 	env := mapEnv(map[string]string{
 		"XDG_RUNTIME_DIR":             dir,
+		"XDG_CONFIG_HOME":             t.TempDir(),
 		"WAYLAND_DISPLAY":             "wayland-test",
 		"HYPRLAND_INSTANCE_SIGNATURE": "trace-test",
 		traceEnvVar:                   tracePath,

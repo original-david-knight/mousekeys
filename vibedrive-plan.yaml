@@ -118,7 +118,7 @@ tasks:
         modifier chord, not a sequence token. Multi-key sequences such as
         "space space" are space-separated tokens. The global Hyprland trigger is
         not part of this config.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

@@ -5,3 +5,6 @@ tasks:
     - id: test-harness-and-observability
       status: done
       notes: Interfaces, deterministic fakes, ARGB helpers, fake timers, and JSONL trace recorder added. go build/test/vet pass; real compositor and installed-service proof remains for the later smoke harness.
+    - id: config-toml-loader
+      status: done
+      notes: Implemented XDG TOML config creation/loading with PRD defaults, missing-field defaulting, generated xkbcommon keysym validation, key sequence parsing, and Shift-space chord separation. Verified go test ./..., go vet ./..., go build ./..., and go test -race ./... pass.
