@@ -63,55 +63,99 @@ func TestPointerRecorderActionAPIsEmitExactOrdering(t *testing.T) {
 
 func TestVirtualPointerSynthesizerWithOutputMotion(t *testing.T) {
 	ctx := context.Background()
-	device := &fakeVirtualPointerDevice{}
-	factory := &fakeVirtualPointerFactory{
-		binding: virtualPointerBinding{
-			Device: device,
-			Mode:   virtualPointerBindingWithOutput,
-			Output: WaylandOutputInfo{Name: "DP-1", LogicalX: 1920, LogicalY: 120, LogicalWidth: 300, LogicalHeight: 200},
-			Layout: virtualPointerLayout{X: -1280, Y: -360, Width: 3500, Height: 1080},
+	tests := []struct {
+		name    string
+		output  WaylandOutputInfo
+		monitor Monitor
+		x       float64
+		y       float64
+		wantX   uint32
+		wantY   uint32
+	}{
+		{
+			name: "non-zero origin scaled output stays local",
+			output: WaylandOutputInfo{
+				Name: "DP-1", LogicalX: 1920, LogicalY: 120, LogicalWidth: 300, LogicalHeight: 200, Scale: 1.5,
+			},
+			monitor: Monitor{Name: "DP-1", OriginX: 1920, OriginY: 120, LogicalWidth: 300, LogicalHeight: 200, Scale: 1.5},
+			x:       12.4,
+			y:       99.6,
+			wantX:   12,
+			wantY:   100,
+		},
+		{
+			name: "negative origin scaled output stays local",
+			output: WaylandOutputInfo{
+				Name: "HDMI-A-1", LogicalX: -1280, LogicalY: -360, LogicalWidth: 400, LogicalHeight: 250, Scale: 2,
+			},
+			monitor: Monitor{Name: "HDMI-A-1", OriginX: -1280, OriginY: -360, LogicalWidth: 400, LogicalHeight: 250, Scale: 2},
+			x:       388.4,
+			y:       0.6,
+			wantX:   388,
+			wantY:   1,
 		},
 	}
-	synth, err := newVirtualPointerSynthesizer(factory, nil, fixedPointerNow(1700000000123))
-	if err != nil {
-		t.Fatalf("newVirtualPointerSynthesizer returned error: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			device := &fakeVirtualPointerDevice{}
+			factory := &fakeVirtualPointerFactory{
+				binding: virtualPointerBinding{
+					Device: device,
+					Mode:   virtualPointerBindingWithOutput,
+					Output: tt.output,
+					Layout: virtualPointerLayout{X: -1280, Y: -360, Width: 3500, Height: 1080},
+				},
+			}
+			synth, err := newVirtualPointerSynthesizer(factory, nil, fixedPointerNow(1700000000123))
+			if err != nil {
+				t.Fatalf("newVirtualPointerSynthesizer returned error: %v", err)
+			}
 
-	monitor := Monitor{Name: "DP-1", OriginX: 1920, OriginY: 120, LogicalWidth: 300, LogicalHeight: 200, Scale: 1}
-	if err := synth.MoveAbsolute(ctx, 12.4, 99.6, monitor); err != nil {
-		t.Fatalf("MoveAbsolute returned error: %v", err)
-	}
+			if err := synth.MoveAbsolute(ctx, tt.x, tt.y, tt.monitor); err != nil {
+				t.Fatalf("MoveAbsolute returned error: %v", err)
+			}
 
-	if len(factory.created) != 1 || factory.created[0].Name != "DP-1" {
-		t.Fatalf("factory created outputs = %+v, want DP-1", factory.created)
-	}
-	want := []fakeVirtualPointerProtocolEvent{
-		{Kind: "motion_absolute", Time: 3487918203, X: 12, Y: 100, XExtent: 300, YExtent: 200},
-		{Kind: "frame"},
-	}
-	if !reflect.DeepEqual(device.events, want) {
-		t.Fatalf("protocol events = %+v, want %+v", device.events, want)
+			if len(factory.created) != 1 || factory.created[0].Name != tt.monitor.Name {
+				t.Fatalf("factory created outputs = %+v, want %s", factory.created, tt.monitor.Name)
+			}
+			want := []fakeVirtualPointerProtocolEvent{
+				{Kind: "motion_absolute", Time: 3487918203, X: tt.wantX, Y: tt.wantY, XExtent: uint32(tt.output.LogicalWidth), YExtent: uint32(tt.output.LogicalHeight)},
+				{Kind: "frame"},
+			}
+			if !reflect.DeepEqual(device.events, want) {
+				t.Fatalf("protocol events = %+v, want %+v", device.events, want)
+			}
+		})
 	}
 }
 
 func TestVirtualPointerSynthesizerFallbackMotionAppliesLayoutOrigin(t *testing.T) {
 	ctx := context.Background()
-	layout := virtualPointerLayout{X: -1280, Y: -360, Width: 5760, Height: 1920}
 	tests := []struct {
 		name   string
+		layout virtualPointerLayout
 		output WaylandOutputInfo
 		wantX  uint32
 		wantY  uint32
 	}{
 		{
-			name:   "positive origin",
-			output: WaylandOutputInfo{Name: "DP-1", LogicalX: 1920, LogicalY: 120, LogicalWidth: 2560, LogicalHeight: 1440},
+			name:   "adds positive focused origin when layout starts at zero",
+			layout: virtualPointerLayout{X: 0, Y: 0, Width: 4480, Height: 1560},
+			output: WaylandOutputInfo{Name: "DP-1", LogicalX: 1920, LogicalY: 120, LogicalWidth: 2560, LogicalHeight: 1440, Scale: 1.5},
+			wantX:  1930,
+			wantY:  141,
+		},
+		{
+			name:   "positive origin with negative layout minimum",
+			layout: virtualPointerLayout{X: -1280, Y: -360, Width: 5760, Height: 1920},
+			output: WaylandOutputInfo{Name: "DP-1", LogicalX: 1920, LogicalY: 120, LogicalWidth: 2560, LogicalHeight: 1440, Scale: 1.25},
 			wantX:  3210,
 			wantY:  501,
 		},
 		{
-			name:   "negative origin",
-			output: WaylandOutputInfo{Name: "HDMI-A-1", LogicalX: -1280, LogicalY: -360, LogicalWidth: 1280, LogicalHeight: 720},
+			name:   "negative origin scaled output",
+			layout: virtualPointerLayout{X: -1280, Y: -360, Width: 5760, Height: 1920},
+			output: WaylandOutputInfo{Name: "HDMI-A-1", LogicalX: -1280, LogicalY: -360, LogicalWidth: 1280, LogicalHeight: 720, Scale: 2},
 			wantX:  10,
 			wantY:  21,
 		},
@@ -124,7 +168,7 @@ func TestVirtualPointerSynthesizerFallbackMotionAppliesLayoutOrigin(t *testing.T
 					Device: device,
 					Mode:   virtualPointerBindingFallback,
 					Output: tt.output,
-					Layout: layout,
+					Layout: tt.layout,
 				},
 			}
 			synth, err := newVirtualPointerSynthesizer(factory, nil, fixedPointerNow(1700000000123))
@@ -137,13 +181,13 @@ func TestVirtualPointerSynthesizerFallbackMotionAppliesLayoutOrigin(t *testing.T
 				OriginY:       tt.output.LogicalY,
 				LogicalWidth:  tt.output.LogicalWidth,
 				LogicalHeight: tt.output.LogicalHeight,
-				Scale:         1,
+				Scale:         tt.output.Scale,
 			}
 			if err := synth.MoveAbsolute(ctx, 10.2, 20.6, monitor); err != nil {
 				t.Fatalf("MoveAbsolute returned error: %v", err)
 			}
 			want := []fakeVirtualPointerProtocolEvent{
-				{Kind: "motion_absolute", Time: 3487918203, X: tt.wantX, Y: tt.wantY, XExtent: 5760, YExtent: 1920},
+				{Kind: "motion_absolute", Time: 3487918203, X: tt.wantX, Y: tt.wantY, XExtent: uint32(tt.layout.Width), YExtent: uint32(tt.layout.Height)},
 				{Kind: "frame"},
 			}
 			if !reflect.DeepEqual(device.events, want) {

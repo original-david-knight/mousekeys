@@ -38,3 +38,6 @@ tasks:
     - id: click-commit-actions
       status: done
       notes: Implemented click commit in overlay driver with fake-clock coverage for single-click timeout, double-click stale timer prevention, Shift-space right click, Escape cancellation, overlay unmap-before-button traces, and stay_active true/false. Target-app delivery remains a real Hyprland smoke requirement.
+    - id: multi-output-scaling-and-alpha-regression
+      status: done
+      notes: Peer review required adding the central task-notes entry; added it. Regressions cover scaled/non-zero/negative focused-monitor geometry, with-output local vs fallback layout pointer paths, scaled logical renderer alignment, Wayland scaling/premult alpha, light/dark label composites, and PRD multi-monitor out-of-scope coverage. go build/test/vet ./... pass.

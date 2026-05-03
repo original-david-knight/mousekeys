@@ -564,7 +564,7 @@ tasks:
 
         Multi-monitor spanning remains out of scope; this task verifies focused
         monitor correctness.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - click-commit-actions

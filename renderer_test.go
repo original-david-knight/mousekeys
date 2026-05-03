@@ -73,6 +73,67 @@ func TestSoftwareRendererSelectedCellOutlineOnly(t *testing.T) {
 	}
 }
 
+func TestSoftwareRendererScaledMonitorGridAndSelectedCellUseLogicalPixels(t *testing.T) {
+	renderer := mustSoftwareRenderer(t, RendererStyle{
+		GridOpacity:   0.55,
+		GridLineWidth: 2,
+		LabelFontSize: 8,
+		HUDFontSize:   10,
+	})
+	monitor := Monitor{
+		Name:          "eDP-1",
+		OriginX:       320,
+		OriginY:       -80,
+		LogicalWidth:  257,
+		LogicalHeight: 193,
+		Scale:         1.75,
+	}
+	grid, err := NewGridGeometry(monitor, 26)
+	if err != nil {
+		t.Fatalf("NewGridGeometry returned error: %v", err)
+	}
+	cell, err := grid.Cell(12, 8)
+	if err != nil {
+		t.Fatalf("Cell returned error: %v", err)
+	}
+	centerX, centerY := cell.X+cell.Width/2, cell.Y+cell.Height/2
+
+	mainGrid, err := renderer.RenderGrid(grid)
+	if err != nil {
+		t.Fatalf("RenderGrid returned error: %v", err)
+	}
+	if mainGrid.Width != monitor.LogicalWidth || mainGrid.Height != monitor.LogicalHeight {
+		t.Fatalf("main grid snapshot = %dx%d, want logical %dx%d", mainGrid.Width, mainGrid.Height, monitor.LogicalWidth, monitor.LogicalHeight)
+	}
+	if edge := mustPixelAt(t, mainGrid, cell.X, centerY); edge.A() == 0 || edge.B() <= edge.R() {
+		t.Fatalf("main grid vertical boundary at selected cell is not visible/bluish: %#08x", uint32(edge))
+	}
+	if center := mustPixelAt(t, mainGrid, centerX, centerY); center.A() != 0 {
+		t.Fatalf("main grid rendered non-edge pixels inside selected cell: %#08x", uint32(center))
+	}
+
+	outline, err := renderer.RenderSelectedCellOutline(monitor, cell)
+	if err != nil {
+		t.Fatalf("RenderSelectedCellOutline returned error: %v", err)
+	}
+	if outline.Width != monitor.LogicalWidth || outline.Height != monitor.LogicalHeight {
+		t.Fatalf("selected outline snapshot = %dx%d, want logical %dx%d", outline.Width, outline.Height, monitor.LogicalWidth, monitor.LogicalHeight)
+	}
+	if edge := mustPixelAt(t, outline, cell.X, centerY); edge.A() == 0 || edge.B() <= edge.R() {
+		t.Fatalf("selected-cell outline edge is not aligned with grid cell boundary: %#08x", uint32(edge))
+	}
+	if center := mustPixelAt(t, outline, centerX, centerY); center.A() != 0 {
+		t.Fatalf("selected-cell outline filled the cell center on scaled monitor: %#08x", uint32(center))
+	}
+	otherCell, err := grid.Cell(4, 8)
+	if err != nil {
+		t.Fatalf("Cell for outside assertion returned error: %v", err)
+	}
+	if outside := mustPixelAt(t, outline, otherCell.X+otherCell.Width/2, otherCell.Y+otherCell.Height/2); outside.A() != 0 {
+		t.Fatalf("selected-cell outline leaked into another logical cell: %#08x", uint32(outside))
+	}
+}
+
 func TestSoftwareRendererLabelsUseHaloWithoutBoxes(t *testing.T) {
 	renderer := mustSoftwareRenderer(t, RendererStyle{
 		GridOpacity:   0,
@@ -209,6 +270,54 @@ func TestWaylandPremultipliedUploadKeepsSemitransparentStrokeBluish(t *testing.T
 	}
 }
 
+func TestWaylandUploadScalesLogicalSnapshotAndAvoidsOverbrightAlpha(t *testing.T) {
+	straightTranslucentWhite := StraightARGB(128, 255, 255, 255)
+	premultipliedWhite := PremultiplyARGBPixel(straightTranslucentWhite)
+	if premultipliedWhite != StraightARGB(128, 128, 128, 128) {
+		t.Fatalf("translucent white premultiplied to %#08x, want alpha-limited channels", uint32(premultipliedWhite))
+	}
+
+	straightBlue := StraightARGB(128, 40, 80, 255)
+	snapshot, err := NewARGBSnapshot(2, 2, []ARGBPixel{
+		straightBlue, StraightARGB(255, 1, 2, 3),
+		StraightARGB(64, 200, 120, 40), StraightARGB(0, 250, 250, 250),
+	})
+	if err != nil {
+		t.Fatalf("NewARGBSnapshot returned error: %v", err)
+	}
+	scale := waylandIntegerBufferScale(1.5)
+	if scale != 2 {
+		t.Fatalf("waylandIntegerBufferScale(1.5) = %d, want 2", scale)
+	}
+	scaled := scaleARGBSnapshotNearest(snapshot, scale)
+	if scaled.Width != 4 || scaled.Height != 4 {
+		t.Fatalf("scaled snapshot size = %dx%d, want 4x4", scaled.Width, scaled.Height)
+	}
+	for y := 0; y < scaled.Height; y++ {
+		for x := 0; x < scaled.Width; x++ {
+			want := snapshot.Pixels[(y/scale)*snapshot.Width+x/scale]
+			if got := mustPixelAt(t, scaled, x, y); got != want {
+				t.Fatalf("scaled pixel %d,%d = %#08x, want nearest source %#08x", x, y, uint32(got), uint32(want))
+			}
+		}
+	}
+	if got := mustPixelAt(t, snapshot, 0, 0); got != straightBlue {
+		t.Fatalf("straight snapshot was mutated by scaling: %#08x", uint32(got))
+	}
+
+	upload := scaled.PremultipliedForWayland()
+	first := upload[0]
+	if first == straightBlue {
+		t.Fatalf("Wayland upload pixel equals straight source after premultiplication: %#08x", uint32(first))
+	}
+	if !IsPremultipliedARGB(first) || first.R() > first.A() || first.G() > first.A() || first.B() > first.A() {
+		t.Fatalf("Wayland upload pixel over-brightened translucent channels: straight=%#08x upload=%#08x", uint32(straightBlue), uint32(first))
+	}
+	if len(scaled.PremultipliedForWaylandBytes()) != scaled.Width*scaled.Height*4 {
+		t.Fatalf("wl_shm byte length does not match scaled ARGB buffer dimensions")
+	}
+}
+
 func TestRendererTransparentCellsCompositeExactlyOverLightAndDark(t *testing.T) {
 	snapshot := mustRenderMainGrid(t, RendererStyle{
 		GridOpacity:   0.55,
@@ -239,6 +348,55 @@ func TestRendererTransparentCellsCompositeExactlyOverLightAndDark(t *testing.T) 
 	}
 	if got := mustPixelAt(t, darkComposite, lineX, lineY); got == dark {
 		t.Fatalf("grid stroke disappeared on dark composite at %d,%d", lineX, lineY)
+	}
+}
+
+func TestSoftwareRendererLabelsAndHalosCompositeReadableOnLightAndDark(t *testing.T) {
+	snapshot := mustRenderMainGrid(t, RendererStyle{
+		GridOpacity:   0.55,
+		GridLineWidth: 2,
+		LabelFontSize: 8,
+		HUDFontSize:   10,
+	}, Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1})
+
+	labelX, labelY, label := findPixel(t, snapshot, Rect{X: 0, Y: 0, Width: 260, Height: 10}, func(pixel ARGBPixel) bool {
+		return pixel.A() > 0 && pixel.G() > pixel.R()+20 && pixel.G() > pixel.B()
+	})
+	if label.A() == 0 {
+		t.Fatal("did not find label foreground")
+	}
+	haloRect := Rect{
+		X:      maxInt(0, labelX-2),
+		Y:      maxInt(0, labelY-2),
+		Width:  minInt(snapshot.Width, labelX+3) - maxInt(0, labelX-2),
+		Height: minInt(snapshot.Height, labelY+3) - maxInt(0, labelY-2),
+	}
+	haloX, haloY, halo := findPixel(t, snapshot, haloRect, func(pixel ARGBPixel) bool {
+		return pixel.A() > 0 && pixel.B() > pixel.G() && pixel.G() > pixel.R()
+	})
+	if halo.A() == 0 {
+		t.Fatal("did not find label halo near foreground")
+	}
+
+	backgrounds := map[string]ARGBPixel{
+		"light": StraightARGB(255, 248, 249, 250),
+		"dark":  StraightARGB(255, 4, 6, 12),
+	}
+	for name, background := range backgrounds {
+		t.Run(name, func(t *testing.T) {
+			composite := snapshot.CompositeOver(background)
+			compositedLabel := mustPixelAt(t, composite, labelX, labelY)
+			compositedHalo := mustPixelAt(t, composite, haloX, haloY)
+			if colorDistanceRGB(compositedLabel, background) < 80 {
+				t.Fatalf("label foreground is too close to %s background: label=%#08x background=%#08x", name, uint32(compositedLabel), uint32(background))
+			}
+			if colorDistanceRGB(compositedLabel, compositedHalo) < 60 {
+				t.Fatalf("label foreground lacks halo contrast on %s background: label=%#08x halo=%#08x", name, uint32(compositedLabel), uint32(compositedHalo))
+			}
+			if name == "light" && colorDistanceRGB(compositedHalo, background) < 80 {
+				t.Fatalf("label halo is too close to light background: halo=%#08x background=%#08x", uint32(compositedHalo), uint32(background))
+			}
+		})
 	}
 }
 
@@ -370,4 +528,15 @@ func countNonTransparent(snapshot ARGBSnapshot, rect Rect) int {
 		}
 	}
 	return count
+}
+
+func colorDistanceRGB(a, b ARGBPixel) int {
+	return absInt(int(a.R())-int(b.R())) + absInt(int(a.G())-int(b.G())) + absInt(int(a.B())-int(b.B()))
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

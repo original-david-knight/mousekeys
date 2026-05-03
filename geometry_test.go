@@ -33,6 +33,91 @@ func TestGridGeometryUnevenDivisionCoversMonitorExactly(t *testing.T) {
 	}
 }
 
+func TestGridCoordinateTransformsUseLogicalPixelsAndVirtualOrigins(t *testing.T) {
+	tests := []struct {
+		name    string
+		monitor Monitor
+		column  int
+		row     int
+	}{
+		{
+			name: "scaled non-zero origin",
+			monitor: Monitor{
+				Name:          "eDP-1",
+				OriginX:       320,
+				OriginY:       45,
+				LogicalWidth:  257,
+				LogicalHeight: 193,
+				Scale:         1.5,
+			},
+			column: 12,
+			row:    8,
+		},
+		{
+			name: "scaled negative origin",
+			monitor: Monitor{
+				Name:          "HDMI-A-1",
+				OriginX:       -1280,
+				OriginY:       -360,
+				LogicalWidth:  1280,
+				LogicalHeight: 720,
+				Scale:         2,
+			},
+			column: 25,
+			row:    0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			grid, err := NewGridGeometry(tt.monitor, 26)
+			if err != nil {
+				t.Fatalf("NewGridGeometry returned error: %v", err)
+			}
+			cell, err := grid.Cell(tt.column, tt.row)
+			if err != nil {
+				t.Fatalf("Cell returned error: %v", err)
+			}
+			wantLocalX, wantLocalY := cell.Center()
+
+			localX, localY, err := grid.CellCenterLocal(tt.column, tt.row)
+			if err != nil {
+				t.Fatalf("CellCenterLocal returned error: %v", err)
+			}
+			if localX != wantLocalX || localY != wantLocalY {
+				t.Fatalf("local center = %.3f,%.3f, want %.3f,%.3f", localX, localY, wantLocalX, wantLocalY)
+			}
+			if localX < 0 || localX > float64(tt.monitor.LogicalWidth) || localY < 0 || localY > float64(tt.monitor.LogicalHeight) {
+				t.Fatalf("local center %.3f,%.3f escaped logical monitor bounds %+v", localX, localY, tt.monitor)
+			}
+
+			virtualX, virtualY, err := grid.CellCenterVirtual(tt.column, tt.row)
+			if err != nil {
+				t.Fatalf("CellCenterVirtual returned error: %v", err)
+			}
+			wantVirtualX := wantLocalX + float64(tt.monitor.OriginX)
+			wantVirtualY := wantLocalY + float64(tt.monitor.OriginY)
+			if virtualX != wantVirtualX || virtualY != wantVirtualY {
+				t.Fatalf("virtual center = %.3f,%.3f, want %.3f,%.3f", virtualX, virtualY, wantVirtualX, wantVirtualY)
+			}
+
+			state := coordinateEntryState{input: string([]byte{
+				byte('A' + tt.column),
+				byte('A' + tt.row),
+			})}
+			selected, err := state.SelectedCell(grid)
+			if err != nil {
+				t.Fatalf("SelectedCell returned error: %v", err)
+			}
+			if selected.CenterLocalX != wantLocalX || selected.CenterLocalY != wantLocalY ||
+				selected.CenterVirtualX != wantVirtualX || selected.CenterVirtualY != wantVirtualY {
+				t.Fatalf("selected centers = local %.3f,%.3f virtual %.3f,%.3f; want local %.3f,%.3f virtual %.3f,%.3f",
+					selected.CenterLocalX, selected.CenterLocalY, selected.CenterVirtualX, selected.CenterVirtualY,
+					wantLocalX, wantLocalY, wantVirtualX, wantVirtualY)
+			}
+		})
+	}
+}
+
 func TestHiddenSubcellGeometryUsesExactCountFormulaPerAxis(t *testing.T) {
 	tests := []struct {
 		name       string
