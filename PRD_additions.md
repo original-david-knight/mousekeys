@@ -33,6 +33,20 @@ The grid overlay must remain translucent while staying legible across light, dar
   - `L` or Right moves right.
 - Movement is not limited to the selected cell. It can continue across the focused monitor and clamps only at the focused monitor edges.
 
+### Held Direction Key Repeat
+
+- Holding any hidden-subcell direction key (`H`/`J`/`K`/`L` or arrow keys) starts automatic cursor movement after a short delay.
+- Releasing the held direction key stops the automatic movement immediately.
+- Held-key repeat applies only to hidden-subcell navigation. Compositor or keyboard repeat must not create extra clicks, double-click completions, coordinate-entry letters, backspaces, exits, or other command actions.
+- The repeat speed ramps up while the same direction key remains held:
+  - Initial repeat begins after approximately 350 ms.
+  - Base repeat moves 1 hidden subcell per tick at approximately 50 ms per tick.
+  - After a sustained hold, movement increases to 2 hidden subcells per tick at approximately 35 ms per tick.
+  - Longer holds increase to 3 hidden subcells per tick at approximately 25 ms per tick.
+  - Very long holds increase to 4 hidden subcells per tick at approximately 16 ms per tick.
+- Acceleration must feel monotonic while the key remains held. Each repeat tick should emit one pointer target for the final accelerated position, rather than a burst of multiple tiny pointer moves that a compositor may visually coalesce unevenly.
+- Starting a different direction key cancels the previous held-key repeat and begins a new repeat delay/ramp for the new direction.
+
 ## Default Click Key Bindings
 
 The default in-overlay click bindings are:
@@ -66,6 +80,9 @@ The right-click binding must be treated as a modifier chord, not as a two-key se
 - Edge letters are green-tinted, outlined, and readable against varied backgrounds.
 - The selected-cell outline remains visible after coordinate entry while the rest of the grid is hidden.
 - H/J/K/L and arrow keys move through the hidden subcell grid and can move outside the selected cell until the focused monitor edge.
+- Holding H/J/K/L or an arrow key auto-repeats hidden-subcell movement after the repeat delay.
+- Continued hold of one direction key visibly accelerates movement and does not slow down until the key is released, a different direction key is pressed, or the focused monitor edge is reached.
+- Releasing the held direction key stops auto-repeat without emitting another movement.
 - `Space` left-clicks at the committed cursor point after the double-click timeout.
 - `Shift-space` right-clicks at the committed cursor point without emitting a left click.
 - `Space Space` within the double-click timeout emits exactly two left-button clicks at the committed cursor point without reopening the main grid between clicks.

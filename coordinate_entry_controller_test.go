@@ -170,6 +170,85 @@ func TestDaemonHiddenSubgridVimKeysMovePointerAndIgnoreOtherLetters(t *testing.T
 	}
 }
 
+func TestDaemonHiddenSubgridDirectionKeyHoldAutoRepeatsUntilRelease(t *testing.T) {
+	ctx := context.Background()
+	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
+
+	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
+	afterSelection := countPointerMotions(pointer)
+
+	press := KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H', KeySym: "h", Keycode: 35}
+	if err := controller.HandleKeyboardToken(ctx, press); err != nil {
+		t.Fatalf("handle held H press: %v", err)
+	}
+	afterPress := afterSelection + 1
+	if got := countPointerMotions(pointer); got != afterPress {
+		t.Fatalf("pointer motions after held H press = %d, want %d", got, afterPress)
+	}
+	assertLastPointerMotion(t, pointer, focused, hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H'))
+
+	clock.Advance(subgridNavigationRepeatDelay - time.Millisecond)
+	if got := countPointerMotions(pointer); got != afterPress {
+		t.Fatalf("pointer motions before repeat delay = %d, want %d", got, afterPress)
+	}
+
+	clock.Advance(time.Millisecond)
+	waitForPointerMotionCount(t, pointer, afterPress+1)
+	assertLastPointerMotion(t, pointer, focused, hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'H'))
+
+	clock.Advance(subgridNavigationRepeatInterval)
+	waitForPointerMotionCount(t, pointer, afterPress+2)
+	assertLastPointerMotion(t, pointer, focused, hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), 'H', 'H', 'H'))
+
+	release := press
+	release.Released = true
+	if err := controller.HandleKeyboardToken(ctx, release); err != nil {
+		t.Fatalf("handle held H release: %v", err)
+	}
+	afterRelease := countPointerMotions(pointer)
+	clock.Advance(subgridNavigationRepeatInterval)
+	if got := countPointerMotions(pointer); got != afterRelease {
+		t.Fatalf("pointer motions after released held H = %d, want %d", got, afterRelease)
+	}
+}
+
+func TestDaemonHiddenSubgridDirectionKeyHoldRepeatAccelerates(t *testing.T) {
+	ctx := context.Background()
+	controller, clock, pointer, _, _, focused, config, _ := newClickActionTestController(t, true)
+
+	mainCell := selectMainGridCellForTest(t, ctx, controller, focused, config.Grid.Size, 'M', 'K')
+	afterSelection := countPointerMotions(pointer)
+	press := KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H', KeySym: "h", Keycode: 35}
+	if err := controller.HandleKeyboardToken(ctx, press); err != nil {
+		t.Fatalf("handle held H press: %v", err)
+	}
+
+	clock.Advance(subgridNavigationRepeatDelay)
+	waitForPointerMotionCount(t, pointer, afterSelection+2)
+	for repeatCount := 2; repeatCount < subgridNavigationRepeatFastAfter; repeatCount++ {
+		clock.Advance(subgridNavigationRepeatInterval)
+		waitForPointerMotionCount(t, pointer, afterSelection+1+repeatCount)
+	}
+	beforeFastTick := countPointerMotions(pointer)
+	clock.Advance(subgridNavigationRepeatInterval - time.Millisecond)
+	if got := countPointerMotions(pointer); got != beforeFastTick {
+		t.Fatalf("pointer motions before fast tick elapsed = %d, want %d", got, beforeFastTick)
+	}
+	clock.Advance(time.Millisecond)
+	waitForPointerMotionCount(t, pointer, beforeFastTick+1)
+
+	beforeAcceleratedInterval := countPointerMotions(pointer)
+	clock.Advance(subgridNavigationRepeatFastInterval - time.Millisecond)
+	if got := countPointerMotions(pointer); got != beforeAcceleratedInterval {
+		t.Fatalf("pointer motions before accelerated interval elapsed = %d, want %d", got, beforeAcceleratedInterval)
+	}
+	clock.Advance(time.Millisecond)
+	waitForPointerMotionCount(t, pointer, beforeAcceleratedInterval+1)
+
+	moves := repeatedMoveForTest('H', subgridNavigationRepeatFastAfter+subgridNavigationRepeatFastStepCount*2)
+	assertLastPointerMotion(t, pointer, focused, hiddenSubgridPointAfterMovesForTest(t, focused.LocalRect(), mainCell, config, mainCell.Center(), moves...))
+}
+
 func TestDaemonHiddenSubgridVimKeysContinueBeyondSelectedCellAndClampAtMonitorEdge(t *testing.T) {
 	ctx := context.Background()
 	config := DefaultConfig()
@@ -287,6 +366,14 @@ func hiddenSubgridPointAfterMovesForTest(t *testing.T, bounds Rect, mainCell Rec
 	return point
 }
 
+func repeatedMoveForTest(move byte, count int) []byte {
+	moves := make([]byte, count)
+	for i := range moves {
+		moves[i] = move
+	}
+	return moves
+}
+
 func selectMainGridCellForTest(t *testing.T, ctx context.Context, controller *DaemonController, monitor Monitor, gridSize int, colLetter byte, rowLetter byte) Rect {
 	t.Helper()
 	if err := controller.HandleKeyboardToken(ctx, KeyboardToken{Kind: KeyboardTokenLetter, Letter: colLetter}); err != nil {
@@ -316,6 +403,28 @@ func assertLastPointerMotion(t *testing.T, pointer *virtualPointerRecorder, outp
 		return
 	}
 	t.Fatalf("pointer recorder has no motion events: %+v", events)
+}
+
+func countPointerMotions(pointer *virtualPointerRecorder) int {
+	count := 0
+	for _, event := range pointer.Events() {
+		if event.Kind == "motion" {
+			count++
+		}
+	}
+	return count
+}
+
+func waitForPointerMotionCount(t *testing.T, pointer *virtualPointerRecorder, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := countPointerMotions(pointer); got >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pointer motions = %d, want at least %d", countPointerMotions(pointer), want)
 }
 
 func waitForRendererPresentationCount(t *testing.T, renderer *fakeRendererSink, want int) {

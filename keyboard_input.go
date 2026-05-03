@@ -65,9 +65,12 @@ type KeyboardToken struct {
 	Kind      KeyboardTokenKind
 	Letter    byte
 	KeySym    KeySym
+	Keycode   uint32
 	Modifiers KeyboardModifiers
 	Commands  []KeyboardCommand
 	Time      time.Time
+	Repeat    bool
+	Released  bool
 }
 
 type KeyboardInputMapper struct {
@@ -180,7 +183,9 @@ func (m *KeyboardInputMapper) Tokens(ctx context.Context, source KeyboardEventSo
 				if !ok {
 					continue
 				}
-				matcher.Apply(&token)
+				if !token.Released && !token.Repeat {
+					matcher.Apply(&token)
+				}
 				select {
 				case tokens <- token:
 				case <-ctx.Done():
@@ -200,17 +205,22 @@ func (m *KeyboardInputMapper) Translate(event KeyboardEvent) (KeyboardToken, boo
 	if kind == "" {
 		kind = KeyboardEventKey
 	}
-	if kind != KeyboardEventKey || !event.Pressed || event.Repeat || event.Key == "" {
+	if kind != KeyboardEventKey || event.Key == "" || event.Repeat {
 		return KeyboardToken{}, false
 	}
 
 	keysym := KeySym(event.Key)
+	if !event.Pressed {
+		return subgridNavigationReleaseToken(event, keysym)
+	}
+
 	commands := m.commandsForEvent(keysym, event.Modifiers)
 	if letter, ok := letterFromKeysymName(event.Key); ok {
 		return KeyboardToken{
 			Kind:      KeyboardTokenLetter,
 			Letter:    letter,
 			KeySym:    keysym,
+			Keycode:   event.Keycode,
 			Modifiers: event.Modifiers,
 			Commands:  commands,
 			Time:      event.Time,
@@ -224,10 +234,34 @@ func (m *KeyboardInputMapper) Translate(event KeyboardEvent) (KeyboardToken, boo
 	return KeyboardToken{
 		Kind:      KeyboardTokenCommand,
 		KeySym:    keysym,
+		Keycode:   event.Keycode,
 		Modifiers: event.Modifiers,
 		Commands:  commands,
 		Time:      event.Time,
 	}, true
+}
+
+func subgridNavigationReleaseToken(event KeyboardEvent, keysym KeySym) (KeyboardToken, bool) {
+	token := KeyboardToken{
+		KeySym:    keysym,
+		Keycode:   event.Keycode,
+		Modifiers: event.Modifiers,
+		Time:      event.Time,
+		Released:  true,
+	}
+	if letter, ok := letterFromKeysymName(event.Key); ok {
+		token.Kind = KeyboardTokenLetter
+		token.Letter = letter
+		if _, ok := subgridMoveDirectionFromToken(token); !ok {
+			return KeyboardToken{}, false
+		}
+		return token, true
+	}
+	token.Kind = KeyboardTokenCommand
+	if _, ok := arrowSubgridMoveDirection(keysym); !ok {
+		return KeyboardToken{}, false
+	}
+	return token, true
 }
 
 func (m *KeyboardInputMapper) commandsForEvent(keysym KeySym, modifiers KeyboardModifiers) []KeyboardCommand {

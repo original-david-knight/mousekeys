@@ -135,6 +135,20 @@ func TestSubgridNavigationFSMUsesArrowKeys(t *testing.T) {
 	}
 }
 
+func TestSubgridNavigationFSMHandlesMultipleStepsAsSingleResult(t *testing.T) {
+	mainCell := Rect{X: 10, Y: 20, Width: 20, Height: 20}
+	bounds := Rect{X: 0, Y: 0, Width: 80, Height: 80}
+	fsm := NewSubgridNavigationFSM(mainCell, bounds, 4, 4, mainCell.Center())
+
+	result := fsm.HandleTokenSteps(KeyboardToken{Kind: KeyboardTokenLetter, Letter: 'H'}, 3)
+	if !result.Changed || result.Direction != SubgridMoveLeft || result.Column != -1 || result.Row != 2 || result.Point != (Point{X: 5, Y: 30}) {
+		t.Fatalf("3-step H result = %+v, want one final result three steps left", result)
+	}
+	if got, want := fsm.Point(), (Point{X: 5, Y: 30}); got != want {
+		t.Fatalf("point after 3-step H = %+v, want %+v", got, want)
+	}
+}
+
 func TestSubgridNavigationFSMCanMoveBeyondSelectedCellUntilMonitorEdge(t *testing.T) {
 	mainCell := Rect{X: 10, Y: 10, Width: 10, Height: 10}
 	bounds := Rect{X: 0, Y: 0, Width: 40, Height: 40}

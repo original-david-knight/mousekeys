@@ -154,6 +154,41 @@ func TestKeyboardInputMapperEmitsArrowKeysForSubgridNavigation(t *testing.T) {
 	}
 }
 
+func TestKeyboardInputMapperEmitsReleaseTokensForSubgridNavigation(t *testing.T) {
+	mapper, err := NewKeyboardInputMapper(DefaultConfig())
+	if err != nil {
+		t.Fatalf("new keyboard input mapper: %v", err)
+	}
+
+	for _, tt := range []struct {
+		key      string
+		wantKind KeyboardTokenKind
+		wantLet  byte
+		wantSym  KeySym
+	}{
+		{key: "h", wantKind: KeyboardTokenLetter, wantLet: 'H', wantSym: "h"},
+		{key: "L", wantKind: KeyboardTokenLetter, wantLet: 'L', wantSym: "L"},
+		{key: "Left", wantKind: KeyboardTokenCommand, wantSym: "Left"},
+		{key: "KP_Down", wantKind: KeyboardTokenCommand, wantSym: "KP_Down"},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			token, ok := mapper.Translate(KeyboardEvent{Key: tt.key, Keycode: 42, Pressed: false})
+			if !ok {
+				t.Fatalf("%s release did not produce a token", tt.key)
+			}
+			if !token.Released || token.Kind != tt.wantKind || token.Letter != tt.wantLet || token.KeySym != tt.wantSym || token.Keycode != 42 || len(token.Commands) != 0 {
+				t.Fatalf("%s release token = %+v, want released %s letter=%q keysym=%q keycode=42 without commands", tt.key, token, tt.wantKind, tt.wantLet, tt.wantSym)
+			}
+		})
+	}
+
+	for _, key := range []string{"a", "Return"} {
+		if token, ok := mapper.Translate(KeyboardEvent{Key: key, Pressed: false}); ok {
+			t.Fatalf("%s release token = %+v, want ignored", key, token)
+		}
+	}
+}
+
 func TestKeyboardInputMapperUsesDefaultSpaceClickBindings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

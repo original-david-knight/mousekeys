@@ -14,6 +14,20 @@ const (
 	DaemonStateOverlayShown DaemonState = "overlay_shown"
 )
 
+const (
+	subgridNavigationRepeatDelay            = 350 * time.Millisecond
+	subgridNavigationRepeatInterval         = 50 * time.Millisecond
+	subgridNavigationRepeatFastAfter        = 6
+	subgridNavigationRepeatFastInterval     = 35 * time.Millisecond
+	subgridNavigationRepeatFastStepCount    = 2
+	subgridNavigationRepeatFasterAfter      = 14
+	subgridNavigationRepeatFasterInterval   = 25 * time.Millisecond
+	subgridNavigationRepeatFasterStepCount  = 3
+	subgridNavigationRepeatFastestAfter     = 24
+	subgridNavigationRepeatFastestInterval  = 16 * time.Millisecond
+	subgridNavigationRepeatFastestStepCount = 4
+)
+
 type DaemonDeps struct {
 	MonitorLookup FocusedMonitorLookup
 	Overlay       WaylandOverlayBackend
@@ -42,6 +56,8 @@ type DaemonController struct {
 	keyboardCancel   context.CancelFunc
 	pendingLeft      *pendingClick
 	clickSerial      int64
+	subgridRepeat    *subgridNavigationRepeat
+	subgridRepeatID  int64
 }
 
 type pendingClick struct {
@@ -51,6 +67,14 @@ type pendingClick struct {
 	groupID  string
 	timer    Timer
 	cancel   chan struct{}
+}
+
+type subgridNavigationRepeat struct {
+	id          int64
+	token       KeyboardToken
+	timer       Timer
+	repeatCount int
+	cancel      chan struct{}
 }
 
 func NewDaemonController(deps DaemonDeps) *DaemonController {
@@ -309,6 +333,8 @@ func (d *DaemonController) consumeKeyboardTokens(ctx context.Context, tokens <-c
 				"letter":   string([]byte{token.Letter}),
 				"keysym":   string(token.KeySym),
 				"commands": keyboardCommandsForTrace(token.Commands),
+				"repeat":   token.Repeat,
+				"released": token.Released,
 			})
 			if err := d.HandleKeyboardToken(ctx, token); err != nil {
 				d.deps.Trace.Record("error", "keyboard_token_failed", map[string]any{"error": err.Error()})
@@ -339,6 +365,20 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 		d.mu.Unlock()
 		return nil
 	}
+	if token.Released {
+		d.cancelSubgridNavigationRepeatForTokenLocked(token)
+		d.mu.Unlock()
+		return nil
+	}
+	if token.Repeat {
+		if d.subgridNavigator == nil {
+			d.mu.Unlock()
+			return nil
+		}
+		_, err := d.handleSubgridNavigationTokenLocked(ctx, token)
+		d.mu.Unlock()
+		return err
+	}
 	if tokenHasKeyboardCommand(token, KeyboardCommandExit) {
 		err := d.hideLocked(ctx)
 		d.mu.Unlock()
@@ -365,24 +405,9 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 	}
 
 	if d.subgridNavigator != nil {
-		result := d.subgridNavigator.HandleToken(token)
-		if !result.Changed {
-			d.mu.Unlock()
-			return nil
-		}
-		if err := d.movePointerLocked(ctx, result.Point); err != nil {
-			d.mu.Unlock()
-			return err
-		}
-		d.deps.Trace.Record("fsm", "subgrid_navigated", map[string]any{
-			"direction": string(result.Direction),
-			"column":    result.Column,
-			"row":       result.Row,
-			"x":         result.Point.X,
-			"y":         result.Point.Y,
-		})
+		_, err := d.handleSubgridNavigationTokenLocked(ctx, token)
 		d.mu.Unlock()
-		return nil
+		return err
 	}
 
 	result := d.coordinateEntry.HandleToken(token)
@@ -431,7 +456,45 @@ func (d *DaemonController) HandleKeyboardToken(ctx context.Context, token Keyboa
 	return nil
 }
 
+func (d *DaemonController) handleSubgridNavigationTokenLocked(ctx context.Context, token KeyboardToken) (bool, error) {
+	return d.handleSubgridNavigationStepsLocked(ctx, token, 1)
+}
+
+func (d *DaemonController) handleSubgridNavigationStepsLocked(ctx context.Context, token KeyboardToken, stepCount int) (bool, error) {
+	if d.subgridNavigator == nil {
+		return false, nil
+	}
+	if _, ok := subgridMoveDirectionFromToken(token); ok && !token.Repeat {
+		d.cancelSubgridNavigationRepeatLocked()
+	}
+	if stepCount < 1 {
+		stepCount = 1
+	}
+
+	result := d.subgridNavigator.HandleTokenSteps(token, stepCount)
+	if !result.Changed {
+		return false, nil
+	}
+	if err := d.movePointerLocked(ctx, result.Point); err != nil {
+		return false, err
+	}
+	d.deps.Trace.Record("fsm", "subgrid_navigated", map[string]any{
+		"direction": string(result.Direction),
+		"column":    result.Column,
+		"row":       result.Row,
+		"x":         result.Point.X,
+		"y":         result.Point.Y,
+		"repeat":    token.Repeat,
+		"steps":     stepCount,
+	})
+	if !token.Repeat && tokenCanStartSubgridNavigationRepeat(token) {
+		d.scheduleSubgridNavigationRepeatLocked(ctx, token)
+	}
+	return true, nil
+}
+
 func (d *DaemonController) handleLeftClickLocked(ctx context.Context, token KeyboardToken) error {
+	d.cancelSubgridNavigationRepeatLocked()
 	if d.pendingLeft != nil {
 		return nil
 	}
@@ -448,6 +511,7 @@ func (d *DaemonController) handleLeftClickLocked(ctx context.Context, token Keyb
 }
 
 func (d *DaemonController) handleRightClickLocked(ctx context.Context) error {
+	d.cancelSubgridNavigationRepeatLocked()
 	d.cancelPendingLeftClickLocked()
 	point, ok, err := d.prepareClickPointLocked(ctx)
 	if err != nil || !ok {
@@ -562,6 +626,7 @@ func (d *DaemonController) finishPendingDoubleClickLocked(ctx context.Context) e
 	if d.pendingLeft == nil {
 		return nil
 	}
+	d.cancelSubgridNavigationRepeatLocked()
 	pending := d.pendingLeft
 	d.cancelPendingLeftClickLocked()
 	if d.state != DaemonStateOverlayShown {
@@ -643,9 +708,159 @@ func (d *DaemonController) cancelPendingLeftClickLocked() {
 	}
 }
 
+func (d *DaemonController) scheduleSubgridNavigationRepeatLocked(ctx context.Context, token KeyboardToken) {
+	d.cancelSubgridNavigationRepeatLocked()
+	timer := d.deps.Clock.After(subgridNavigationRepeatDelay)
+	token.Repeat = true
+	token.Released = false
+	token.Commands = nil
+	pending := &subgridNavigationRepeat{
+		id:     d.nextSubgridNavigationRepeatIDLocked(),
+		token:  token,
+		timer:  timer,
+		cancel: make(chan struct{}),
+	}
+	d.subgridRepeat = pending
+	go d.awaitSubgridNavigationRepeat(ctx, pending)
+}
+
+func (d *DaemonController) awaitSubgridNavigationRepeat(ctx context.Context, pending *subgridNavigationRepeat) {
+	for {
+		select {
+		case <-pending.timer.C():
+			keepRepeating, err := d.repeatSubgridNavigationByID(ctx, pending.id)
+			if err != nil {
+				d.deps.Trace.Record("error", "subgrid_navigation_repeat_failed", map[string]any{"error": err.Error()})
+			}
+			if !keepRepeating {
+				return
+			}
+		case <-pending.cancel:
+			return
+		case <-ctx.Done():
+			d.cancelSubgridNavigationRepeatByID(pending.id)
+			return
+		}
+	}
+}
+
+func (d *DaemonController) repeatSubgridNavigationByID(ctx context.Context, id int64) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.subgridRepeat == nil || d.subgridRepeat.id != id {
+		return false, nil
+	}
+	if d.state != DaemonStateOverlayShown || d.subgridNavigator == nil {
+		d.cancelSubgridNavigationRepeatLocked()
+		return false, nil
+	}
+	repeatCount := d.subgridRepeat.repeatCount + 1
+	stepCount := subgridNavigationRepeatStepCountForCount(repeatCount)
+	changed, err := d.handleSubgridNavigationStepsLocked(ctx, d.subgridRepeat.token, stepCount)
+	if err != nil {
+		d.cancelSubgridNavigationRepeatLocked()
+		return false, err
+	}
+	if !changed {
+		d.cancelSubgridNavigationRepeatLocked()
+		return false, nil
+	}
+	if d.subgridRepeat != nil && d.subgridRepeat.id == id && d.subgridRepeat.timer != nil {
+		d.subgridRepeat.repeatCount = repeatCount
+		d.subgridRepeat.timer.Reset(subgridNavigationRepeatIntervalForCount(d.subgridRepeat.repeatCount))
+	}
+	return true, nil
+}
+
+func (d *DaemonController) cancelSubgridNavigationRepeatByID(id int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.subgridRepeat == nil || d.subgridRepeat.id != id {
+		return
+	}
+	d.cancelSubgridNavigationRepeatLocked()
+}
+
+func (d *DaemonController) cancelSubgridNavigationRepeatForTokenLocked(token KeyboardToken) {
+	if d.subgridRepeat == nil {
+		return
+	}
+	if token.KeySym == "" && token.Letter == 0 && token.Keycode == 0 {
+		d.cancelSubgridNavigationRepeatLocked()
+		return
+	}
+	if sameKeyboardTokenKey(d.subgridRepeat.token, token) {
+		d.cancelSubgridNavigationRepeatLocked()
+	}
+}
+
+func (d *DaemonController) cancelSubgridNavigationRepeatLocked() {
+	if d.subgridRepeat == nil {
+		return
+	}
+	pending := d.subgridRepeat
+	d.subgridRepeat = nil
+	if pending.timer != nil {
+		pending.timer.Stop()
+	}
+	if pending.cancel != nil {
+		close(pending.cancel)
+	}
+}
+
+func sameKeyboardTokenKey(a KeyboardToken, b KeyboardToken) bool {
+	if a.Keycode != 0 && b.Keycode != 0 {
+		return a.Keycode == b.Keycode
+	}
+	if a.KeySym != "" && b.KeySym != "" {
+		return a.KeySym == b.KeySym && a.Modifiers == b.Modifiers
+	}
+	if a.Letter != 0 && b.Letter != 0 {
+		aLetter, aOK := normalizedGridLetter(a.Letter)
+		bLetter, bOK := normalizedGridLetter(b.Letter)
+		return aOK && bOK && aLetter == bLetter
+	}
+	return false
+}
+
+func tokenCanStartSubgridNavigationRepeat(token KeyboardToken) bool {
+	return token.Keycode != 0 || token.KeySym != ""
+}
+
+func subgridNavigationRepeatIntervalForCount(repeatCount int) time.Duration {
+	switch {
+	case repeatCount >= subgridNavigationRepeatFastestAfter:
+		return subgridNavigationRepeatFastestInterval
+	case repeatCount >= subgridNavigationRepeatFasterAfter:
+		return subgridNavigationRepeatFasterInterval
+	case repeatCount >= subgridNavigationRepeatFastAfter:
+		return subgridNavigationRepeatFastInterval
+	default:
+		return subgridNavigationRepeatInterval
+	}
+}
+
+func subgridNavigationRepeatStepCountForCount(repeatCount int) int {
+	switch {
+	case repeatCount >= subgridNavigationRepeatFastestAfter:
+		return subgridNavigationRepeatFastestStepCount
+	case repeatCount >= subgridNavigationRepeatFasterAfter:
+		return subgridNavigationRepeatFasterStepCount
+	case repeatCount >= subgridNavigationRepeatFastAfter:
+		return subgridNavigationRepeatFastStepCount
+	default:
+		return 1
+	}
+}
+
 func (d *DaemonController) nextClickIDLocked() int64 {
 	d.clickSerial++
 	return d.clickSerial
+}
+
+func (d *DaemonController) nextSubgridNavigationRepeatIDLocked() int64 {
+	d.subgridRepeatID++
+	return d.subgridRepeatID
 }
 
 func (d *DaemonController) currentClickGroupIDLocked() string {
@@ -812,6 +1027,7 @@ func (d *DaemonController) clearOverlayStateLocked() {
 }
 
 func (d *DaemonController) resetCoordinateEntryLocked() {
+	d.cancelSubgridNavigationRepeatLocked()
 	if d.coordinateEntry != nil {
 		d.coordinateEntry.Reset()
 	}

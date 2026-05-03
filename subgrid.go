@@ -158,6 +158,10 @@ func (f *SubgridNavigationFSM) Point() Point {
 }
 
 func (f *SubgridNavigationFSM) HandleToken(token KeyboardToken) SubgridNavigationResult {
+	return f.HandleTokenSteps(token, 1)
+}
+
+func (f *SubgridNavigationFSM) HandleTokenSteps(token KeyboardToken, steps int) SubgridNavigationResult {
 	if f == nil {
 		return SubgridNavigationResult{}
 	}
@@ -165,7 +169,22 @@ func (f *SubgridNavigationFSM) HandleToken(token KeyboardToken) SubgridNavigatio
 	if !ok {
 		return SubgridNavigationResult{}
 	}
+	if steps < 1 {
+		steps = 1
+	}
 
+	var result SubgridNavigationResult
+	for i := 0; i < steps; i++ {
+		next := f.handleDirection(direction)
+		if !next.Changed {
+			break
+		}
+		result = next
+	}
+	return result
+}
+
+func (f *SubgridNavigationFSM) handleDirection(direction SubgridMoveDirection) SubgridNavigationResult {
 	nextCol := f.col
 	nextRow := f.row
 	nextPoint := f.point
