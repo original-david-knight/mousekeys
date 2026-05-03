@@ -8,3 +8,6 @@ tasks:
     - id: config-toml-loader
       status: done
       notes: Implemented XDG TOML config creation/loading with PRD defaults, missing-field defaulting, generated xkbcommon keysym validation, key sequence parsing, and Shift-space chord separation. Verified go test ./..., go vet ./..., go build ./..., and go test -race ./... pass.
+    - id: ipc-socket-and-toggle
+      status: done
+      notes: Implemented NDJSON Unix-socket IPC at $XDG_RUNTIME_DIR/mousekeys.sock. Status includes active state, pid, build id, daemon binary/socket/runtime, service env hints, and client binary metadata. Tests cover temp runtime cleanup, live-daemon refusal, stale socket removal, and show/hide/toggle transitions through a stub overlay.

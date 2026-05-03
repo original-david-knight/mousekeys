@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -25,25 +24,17 @@ func TestRootHelpListsCommands(t *testing.T) {
 	}
 }
 
-func TestStatusIncludesBuildMetadata(t *testing.T) {
+func TestStatusRequiresIPCRuntimeDir(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"status"}, &stdout, &stderr, emptyEnv)
-	if code != 0 {
-		t.Fatalf("run returned %d, want 0; stderr=%q", code, stderr.String())
+	if code != 1 {
+		t.Fatalf("run returned %d, want 1", code)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-
-	var status statusOutput
-	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
-		t.Fatalf("status output is not JSON: %v\n%s", err, stdout.String())
-	}
-	if status.Build.Version == "" || status.Build.Commit == "" || status.Build.BuildDate == "" || status.Build.GoVersion == "" {
-		t.Fatalf("status missing build metadata: %+v", status.Build)
-	}
-	if status.IPC != "not_implemented" {
-		t.Fatalf("status IPC = %q, want not_implemented", status.IPC)
+	if !strings.Contains(stderr.String(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("stderr missing XDG_RUNTIME_DIR error:\n%s", stderr.String())
 	}
 }
 

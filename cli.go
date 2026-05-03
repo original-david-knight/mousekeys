@@ -28,11 +28,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv ge
 	case "daemon":
 		return runDaemonCommand(ctx, args[1:], stderr, logger, getenv)
 	case "show":
-		return runClientCommand(args[0], args[1:], stderr, logger)
+		return runClientCommand(ctx, args[0], args[1:], stderr, logger, getenv)
 	case "hide":
-		return runClientCommand(args[0], args[1:], stderr, logger)
+		return runClientCommand(ctx, args[0], args[1:], stderr, logger, getenv)
 	case "status":
-		return runStatusCommand(args[1:], stdout, stderr, logger)
+		return runStatusCommand(ctx, args[1:], stdout, stderr, logger, getenv)
 	default:
 		fmt.Fprintf(stderr, "mousekeys: unknown command %q\n", args[0])
 		printRootUsage(stderr)
@@ -46,9 +46,9 @@ func printRootUsage(w io.Writer) {
 
 Commands:
   daemon   Run the persistent Hyprland/Wayland daemon.
-  show     Request the daemon to show or toggle the grid. IPC wiring is pending.
-  hide     Request the daemon to hide the grid. IPC wiring is pending.
-  status   Print local binary status and build metadata.
+  show     Request the daemon to show the grid, or toggle it off if active.
+  hide     Request the daemon to hide the grid if active.
+  status   Print daemon state and build metadata.
 
 Environment:
   MOUSEKEYS_LOG=debug              Enable debug structured logs on stderr.
@@ -83,11 +83,11 @@ XDG_RUNTIME_DIR, WAYLAND_DISPLAY, and HYPRLAND_INSTANCE_SIGNATURE set.
 	return runDaemon(ctx, logger, getenv)
 }
 
-func runClientCommand(command string, args []string, stderr io.Writer, logger *slog.Logger) int {
+func runClientCommand(ctx context.Context, command string, args []string, stderr io.Writer, logger *slog.Logger, getenv getenvFunc) int {
 	fs := flag.NewFlagSet("mousekeys "+command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage:\n  mousekeys %s\n\nIPC wiring for this command is scheduled in a later task.\n", command)
+		fmt.Fprintf(fs.Output(), "Usage:\n  mousekeys %s\n\nSends an IPC command to the running mousekeys daemon.\n", command)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -102,25 +102,40 @@ func runClientCommand(command string, args []string, stderr io.Writer, logger *s
 		return 2
 	}
 
-	logger.Debug("client command accepted", "command", command, "ipc", "not_implemented")
+	response, err := sendIPCCommand(ctx, getenv, command)
+	if err != nil {
+		fmt.Fprintf(stderr, "mousekeys %s: %v\n", command, err)
+		return 1
+	}
+
+	logger.Debug("client command completed", "command", command, "active", response.Active, "action", response.Action)
 	return 0
 }
 
 type statusOutput struct {
-	Command    string    `json:"command"`
-	IPC        string    `json:"ipc"`
-	Build      buildInfo `json:"build"`
-	Executable string    `json:"executable,omitempty"`
+	Command    string          `json:"command"`
+	IPC        string          `json:"ipc"`
+	Active     bool            `json:"active"`
+	State      string          `json:"state"`
+	PID        int             `json:"pid"`
+	BuildID    string          `json:"build_id"`
+	Build      buildInfo       `json:"build"`
+	Executable string          `json:"executable,omitempty"`
+	Socket     string          `json:"socket,omitempty"`
+	RuntimeDir string          `json:"runtime_dir,omitempty"`
+	Binary     binaryMetadata  `json:"binary"`
+	Service    serviceMetadata `json:"service"`
+	Client     *binaryMetadata `json:"client,omitempty"`
 }
 
-func runStatusCommand(args []string, stdout, stderr io.Writer, logger *slog.Logger) int {
+func runStatusCommand(ctx context.Context, args []string, stdout, stderr io.Writer, logger *slog.Logger, getenv getenvFunc) int {
 	fs := flag.NewFlagSet("mousekeys status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `Usage:
   mousekeys status
 
-Prints this binary's build metadata. Daemon status will be added with IPC.
+Prints structured daemon state from the running mousekeys daemon.
 `)
 	}
 
@@ -136,14 +151,21 @@ Prints this binary's build metadata. Daemon status will be added with IPC.
 		return 2
 	}
 
-	logger.Debug("status requested", "ipc", "not_implemented")
-
-	out := statusOutput{
-		Command:    "status",
-		IPC:        "not_implemented",
-		Build:      currentBuildInfo(),
-		Executable: executablePath(),
+	response, err := sendIPCCommand(ctx, getenv, "status")
+	if err != nil {
+		fmt.Fprintf(stderr, "mousekeys status: %v\n", err)
+		return 1
 	}
+	if response.Status == nil {
+		fmt.Fprintln(stderr, "mousekeys status: daemon returned no status payload")
+		return 1
+	}
+
+	out := *response.Status
+	client := currentBinaryMetadata()
+	out.Client = &client
+	logger.Debug("status requested", "active", out.Active, "pid", out.PID, "socket", out.Socket)
+
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {

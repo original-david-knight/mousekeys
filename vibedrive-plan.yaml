@@ -154,7 +154,7 @@ tasks:
 
         The daemon must refuse to start when another live daemon owns the socket,
         while safely removing stale sockets.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton
