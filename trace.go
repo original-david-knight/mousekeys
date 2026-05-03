@@ -23,6 +23,8 @@ const (
 	traceOverlayDestroy       = "overlay.destroy"
 	traceOverlayOutputChange  = "overlay.output_change"
 	traceOverlayClose         = "overlay.compositor_close"
+	traceOverlayRelease       = "overlay.release"
+	traceOverlayError         = "overlay.error"
 	traceKeyboardKeymap       = "keyboard.keymap"
 	traceKeyboardEnter        = "keyboard.enter"
 	traceKeyboardLeave        = "keyboard.leave"

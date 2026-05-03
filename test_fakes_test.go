@@ -83,12 +83,14 @@ type fakeWaylandBackend struct {
 	events   []fakeWaylandEvent
 	nextID   int
 	keyboard *fakeKeyboardEventSource
+	surfaces map[int]*fakeOverlaySurface
 }
 
 func newFakeWaylandBackend(trace *TraceRecorder) *fakeWaylandBackend {
 	return &fakeWaylandBackend{
 		trace:    trace,
 		keyboard: newFakeKeyboardEventSource(trace),
+		surfaces: make(map[int]*fakeOverlaySurface),
 	}
 }
 
@@ -102,10 +104,12 @@ func (f *fakeWaylandBackend) CreateSurface(ctx context.Context, monitor Monitor)
 	f.mu.Lock()
 	f.nextID++
 	id := f.nextID
+	surface := &fakeOverlaySurface{backend: f, id: id, monitor: monitor, lifecycle: newFakeOverlayLifecycleEventSource()}
+	f.surfaces[id] = surface
 	f.events = append(f.events, fakeWaylandEvent{Kind: "surface_create", SurfaceID: id, Monitor: monitor, OutputName: monitor.Name})
 	f.mu.Unlock()
 	f.trace.Record(traceOverlaySurfaceCreate, map[string]any{"surface_id": id, "monitor": monitor})
-	return &fakeOverlaySurface{backend: f, id: id, monitor: monitor}, nil
+	return surface, nil
 }
 
 func (f *fakeWaylandBackend) OutputChanged(ctx context.Context, monitor Monitor) error {
@@ -140,10 +144,22 @@ func (f *fakeWaylandBackend) Events() []fakeWaylandEvent {
 	return out
 }
 
+func (f *fakeWaylandBackend) LastSurface() *fakeOverlaySurface {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nextID == 0 {
+		return nil
+	}
+	return f.surfaces[f.nextID]
+}
+
 type fakeOverlaySurface struct {
-	backend *fakeWaylandBackend
-	id      int
-	monitor Monitor
+	backend   *fakeWaylandBackend
+	id        int
+	monitor   Monitor
+	lifecycle *fakeOverlayLifecycleEventSource
+	mu        sync.Mutex
+	destroyed bool
 }
 
 func (s *fakeOverlaySurface) Configure(ctx context.Context, width, height int, scale float64) error {
@@ -206,6 +222,12 @@ func (s *fakeOverlaySurface) Unmap(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	if s.destroyed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
 	s.backend.record(fakeWaylandEvent{Kind: "unmap", SurfaceID: s.id, Monitor: s.monitor})
 	s.backend.trace.Record(traceOverlayUnmap, map[string]any{"surface_id": s.id})
 	return nil
@@ -215,9 +237,49 @@ func (s *fakeOverlaySurface) Destroy(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	if s.destroyed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.destroyed = true
+	s.mu.Unlock()
+	if s.lifecycle != nil {
+		_ = s.lifecycle.Close()
+	}
 	s.backend.record(fakeWaylandEvent{Kind: "destroy", SurfaceID: s.id, Monitor: s.monitor})
 	s.backend.trace.Record(traceOverlayDestroy, map[string]any{"surface_id": s.id})
 	return nil
+}
+
+func (s *fakeOverlaySurface) LifecycleEvents() OverlayLifecycleEventSource {
+	return s.lifecycle
+}
+
+func (s *fakeOverlaySurface) EnqueueLifecycle(events ...OverlayLifecycleEvent) {
+	for _, event := range events {
+		s.lifecycle.enqueue(event)
+	}
+}
+
+type fakeOverlayLifecycleEventSource struct {
+	queue *overlayEventQueue[OverlayLifecycleEvent]
+}
+
+func newFakeOverlayLifecycleEventSource() *fakeOverlayLifecycleEventSource {
+	return &fakeOverlayLifecycleEventSource{queue: newOverlayEventQueue[OverlayLifecycleEvent]()}
+}
+
+func (s *fakeOverlayLifecycleEventSource) NextOverlayEvent(ctx context.Context) (OverlayLifecycleEvent, error) {
+	return s.queue.pop(ctx, nil)
+}
+
+func (s *fakeOverlayLifecycleEventSource) Close() error {
+	return s.queue.close()
+}
+
+func (s *fakeOverlayLifecycleEventSource) enqueue(event OverlayLifecycleEvent) {
+	s.queue.push(event)
 }
 
 type fakeKeyboardEventSource struct {
@@ -235,6 +297,7 @@ func newFakeKeyboardEventSource(trace *TraceRecorder) *fakeKeyboardEventSource {
 func (f *fakeKeyboardEventSource) BeginShow() {
 	f.mu.Lock()
 	f.showCount++
+	f.closed = false
 	f.mu.Unlock()
 }
 

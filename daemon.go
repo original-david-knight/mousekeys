@@ -53,7 +53,15 @@ func runDaemonWithOptions(ctx context.Context, logger *slog.Logger, getenv geten
 		}
 	}()
 
-	controller := newDaemonController(opts.Overlay, newDaemonStatusBase(session, socketPath, getenv))
+	overlay := opts.Overlay
+	if overlay == nil {
+		overlay, err = newProductionOverlayDriver(getenv, loadedConfig.Config, trace)
+		if err != nil {
+			logger.Error("daemon startup failed", "error", err)
+			return 1
+		}
+	}
+	controller := newDaemonController(overlay, newDaemonStatusBase(session, socketPath, getenv))
 	serverCtx, stopServer := context.WithCancel(ctx)
 	defer stopServer()
 	serverErr := make(chan error, 1)

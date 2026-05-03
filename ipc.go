@@ -53,9 +53,12 @@ type serviceMetadata struct {
 type overlayCancelReason string
 
 const (
-	overlayCancelShowToggle     overlayCancelReason = "show_toggle"
-	overlayCancelHide           overlayCancelReason = "hide"
-	overlayCancelDaemonShutdown overlayCancelReason = "daemon_shutdown"
+	overlayCancelShowToggle      overlayCancelReason = "show_toggle"
+	overlayCancelHide            overlayCancelReason = "hide"
+	overlayCancelEscape          overlayCancelReason = "escape"
+	overlayCancelCompositor      overlayCancelReason = "compositor_close"
+	overlayCancelKeyboardDestroy overlayCancelReason = "keyboard_destroy"
+	overlayCancelDaemonShutdown  overlayCancelReason = "daemon_shutdown"
 )
 
 type overlayDriver interface {
@@ -114,6 +117,7 @@ func (c *daemonController) Dispatch(ctx context.Context, request ipcRequest) ipc
 func (c *daemonController) show(ctx context.Context) ipcResponse {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.refreshActiveLocked()
 
 	action := "shown"
 	if c.active {
@@ -141,6 +145,7 @@ func (c *daemonController) show(ctx context.Context) ipcResponse {
 func (c *daemonController) hide(ctx context.Context) ipcResponse {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.refreshActiveLocked()
 
 	action := "noop"
 	if c.active {
@@ -163,6 +168,7 @@ func (c *daemonController) hide(ctx context.Context) ipcResponse {
 func (c *daemonController) statusResponse() ipcResponse {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.refreshActiveLocked()
 
 	status := c.statusLocked()
 	return ipcResponse{
@@ -177,14 +183,22 @@ func (c *daemonController) statusResponse() ipcResponse {
 func (c *daemonController) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.refreshActiveLocked()
+	var errs []error
 	if !c.active {
-		return nil
+		if closer, ok := c.overlay.(interface{ CloseOverlay(context.Context) error }); ok {
+			errs = append(errs, closer.CloseOverlay(ctx))
+		}
+		return errors.Join(errs...)
 	}
 	if err := c.overlay.CancelOverlay(ctx, overlayCancelDaemonShutdown); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	c.active = false
-	return nil
+	if closer, ok := c.overlay.(interface{ CloseOverlay(context.Context) error }); ok {
+		errs = append(errs, closer.CloseOverlay(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 func (c *daemonController) statusLocked() statusOutput {
@@ -194,6 +208,12 @@ func (c *daemonController) statusLocked() statusOutput {
 	status.Active = c.active
 	status.State = activeState(c.active)
 	return status
+}
+
+func (c *daemonController) refreshActiveLocked() {
+	if reporter, ok := c.overlay.(interface{ OverlayActive() bool }); ok {
+		c.active = reporter.OverlayActive()
+	}
 }
 
 func ipcErrorResponse(command string, active bool, err error) ipcResponse {

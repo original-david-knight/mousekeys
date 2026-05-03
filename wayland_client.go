@@ -444,9 +444,12 @@ func (c *WaylandClientBase) handleSeatCapabilities(capabilities uint32) waylandS
 	}
 }
 
-func (c *WaylandClientBase) noteOutputBindError(global uint32, err error) {
+func (c *WaylandClientBase) noteOutput(global uint32, output *client.Output, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if state := c.outputs[global]; state != nil && err == nil {
+		state.proxy = output
+	}
 	c.appendBindErrLocked(fmt.Sprintf("%s:%d", waylandGlobalOutput, global), err)
 }
 
@@ -609,6 +612,7 @@ func (c *WaylandClientBase) validateRequired() error {
 type waylandOutputState struct {
 	global  uint32
 	version uint32
+	proxy   *client.Output
 
 	geometrySet      bool
 	x                int
@@ -815,7 +819,7 @@ func (d *realWaylandBaseDriver) bindGlobal(binding waylandGlobalBinding, c *Wayl
 		})
 		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, output)
 		d.outputs[global] = output
-		c.noteOutputBindError(global, err)
+		c.noteOutput(global, output, err)
 	case waylandBindingLayerShell:
 		layerShell := wlr.NewLayerShell(ctx)
 		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, layerShell)

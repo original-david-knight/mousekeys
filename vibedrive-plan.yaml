@@ -307,7 +307,7 @@ tasks:
 
         For this task, a placeholder render is acceptable; main grid drawing is
         wired in main-grid-coordinate-entry.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base

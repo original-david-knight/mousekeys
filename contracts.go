@@ -49,6 +49,35 @@ type OverlaySurface interface {
 	Destroy(ctx context.Context) error
 }
 
+type OverlayLifecycleEventKind string
+
+const (
+	OverlayLifecycleConfigure       OverlayLifecycleEventKind = "configure"
+	OverlayLifecycleRelease         OverlayLifecycleEventKind = "release"
+	OverlayLifecycleOutputChange    OverlayLifecycleEventKind = "output_change"
+	OverlayLifecycleCompositorClose OverlayLifecycleEventKind = "compositor_close"
+	OverlayLifecycleDestroy         OverlayLifecycleEventKind = "destroy"
+	OverlayLifecycleError           OverlayLifecycleEventKind = "error"
+)
+
+type OverlayLifecycleEvent struct {
+	Kind    OverlayLifecycleEventKind
+	Width   int
+	Height  int
+	Scale   float64
+	Monitor Monitor
+	Err     error
+}
+
+type OverlayLifecycleEventSource interface {
+	NextOverlayEvent(ctx context.Context) (OverlayLifecycleEvent, error)
+	Close() error
+}
+
+type OverlayLifecycleEventProvider interface {
+	LifecycleEvents() OverlayLifecycleEventSource
+}
+
 type RendererBufferSink interface {
 	UploadARGB(ctx context.Context, target string, buffer ARGBSnapshot) error
 }
