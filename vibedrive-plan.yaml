@@ -266,7 +266,7 @@ tasks:
         - empty cells stay transparent, with no opaque panel or label boxes
         - appearance.grid_opacity controls visible line strength
         - appearance.grid_line_width controls core stroke width, with derived halo
-      status: todo
+      status: done
       workflow: implement
       deps:
         - config-toml-loader

@@ -87,3 +87,46 @@ func (s ARGBSnapshot) PremultipliedForWayland() []ARGBPixel {
 	}
 	return out
 }
+
+func (s ARGBSnapshot) PremultipliedForWaylandBytes() []byte {
+	pixels := s.PremultipliedForWayland()
+	out := make([]byte, len(pixels)*4)
+	for i, pixel := range pixels {
+		binary.LittleEndian.PutUint32(out[i*4:], uint32(pixel))
+	}
+	return out
+}
+
+func AlphaOverStraightARGB(src, dst ARGBPixel) ARGBPixel {
+	srcA := uint32(src.A())
+	if srcA == 0 {
+		return dst
+	}
+	dstA := uint32(dst.A())
+	if srcA == 255 || dstA == 0 {
+		return src
+	}
+
+	den := srcA*255 + dstA*(255-srcA)
+	if den == 0 {
+		return 0
+	}
+	outA := uint8((den + 127) / 255)
+	outR := blendStraightChannel(src.R(), srcA, dst.R(), dstA, den)
+	outG := blendStraightChannel(src.G(), srcA, dst.G(), dstA, den)
+	outB := blendStraightChannel(src.B(), srcA, dst.B(), dstA, den)
+	return StraightARGB(outA, outR, outG, outB)
+}
+
+func blendStraightChannel(srcC uint8, srcA uint32, dstC uint8, dstA uint32, den uint32) uint8 {
+	num := uint32(srcC)*srcA*255 + uint32(dstC)*dstA*(255-srcA)
+	return uint8((num + den/2) / den)
+}
+
+func (s ARGBSnapshot) CompositeOver(background ARGBPixel) ARGBSnapshot {
+	pixels := make([]ARGBPixel, len(s.Pixels))
+	for i, pixel := range s.Pixels {
+		pixels[i] = AlphaOverStraightARGB(pixel, background)
+	}
+	return ARGBSnapshot{Width: s.Width, Height: s.Height, Pixels: pixels}
+}

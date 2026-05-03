@@ -17,3 +17,6 @@ tasks:
     - id: wayland-client-base
       status: done
       notes: Pinned go-wayland and scanner; vendored/generated wlroots layer-shell and virtual-pointer bindings. Added deadline-bound Wayland base with required global binding, xdg-output fallback, output matching, clear missing-socket/global/seat errors, and race-safe headless tests.
+    - id: renderer-font-alpha-and-grid-style
+      status: done
+      notes: PRD_additions.md was absent. Implemented pure-Go bundled 5x7 bitmap atlas to avoid FreeType/cgo/native deps; label and HUD glyphs are cached at renderer construction. Straight-ARGB snapshots remain separate from wl_shm premultiplied bytes; tests cover bluish grid core/dark halo, green labels/dark halo, transparent composites, opacity/width controls, and no white premult upload.
