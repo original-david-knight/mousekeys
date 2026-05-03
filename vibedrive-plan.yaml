@@ -692,7 +692,7 @@ tasks:
 
         Docs should clearly say the global trigger hotkey lives in Hyprland
         config, not in mousekeys config.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - config-toml-loader

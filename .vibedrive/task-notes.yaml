@@ -47,3 +47,6 @@ tasks:
     - id: systemd-user-unit
       status: done
       notes: Added mousekeys.service user unit, install lifecycle docs stub, status binary identity metadata for stale-service checks, and task notes. go build/test/vet and systemd-analyze --user verify passed without warnings.
+    - id: docs-hyprland-and-install
+      status: done
+      notes: README.md was missing and is now created. PRD.md and vibedrive-plan.yaml were left unchanged. README covers Lua/legacy Hyprland trigger and autostart, systemd lifecycle with environment import/UWSM requirement, exact config defaults, v1 non-goals, stale daemon/focus/keymap/click-delivery troubleshooting, and smoke checks; configured README grep checks pass.
