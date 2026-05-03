@@ -33,6 +33,52 @@ func TestGridGeometryUnevenDivisionCoversMonitorExactly(t *testing.T) {
 	}
 }
 
+func TestHiddenSubcellGeometryUsesExactCountFormulaPerAxis(t *testing.T) {
+	tests := []struct {
+		name       string
+		cell       Rect
+		pixelSize  int
+		wantCountX int
+		wantCountY int
+	}{
+		{
+			name:       "minimum one",
+			cell:       Rect{Width: 1, Height: 2},
+			pixelSize:  5,
+			wantCountX: 1,
+			wantCountY: 1,
+		},
+		{
+			name:       "round down and round up independently",
+			cell:       Rect{Width: 12, Height: 13},
+			pixelSize:  5,
+			wantCountX: 2,
+			wantCountY: 3,
+		},
+		{
+			name:       "cap at alphabet size",
+			cell:       Rect{Width: 500, Height: 250},
+			pixelSize:  5,
+			wantCountX: 26,
+			wantCountY: 26,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			grid, err := NewHiddenSubcellGeometry(tt.cell, tt.pixelSize)
+			if err != nil {
+				t.Fatalf("NewHiddenSubcellGeometry returned error: %v", err)
+			}
+			if grid.CountX != tt.wantCountX || grid.CountY != tt.wantCountY {
+				t.Fatalf("hidden counts = %dx%d, want %dx%d", grid.CountX, grid.CountY, tt.wantCountX, tt.wantCountY)
+			}
+			if grid.StepX != float64(tt.cell.Width)/float64(tt.wantCountX) || grid.StepY != float64(tt.cell.Height)/float64(tt.wantCountY) {
+				t.Fatalf("hidden steps = %.3fx%.3f do not match cell/count formula", grid.StepX, grid.StepY)
+			}
+		})
+	}
+}
+
 func assertPartitionCoversExactly(t *testing.T, name string, spans []Span, total int) {
 	t.Helper()
 	if len(spans) != 26 {

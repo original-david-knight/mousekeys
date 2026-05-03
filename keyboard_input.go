@@ -35,6 +35,7 @@ type KeyboardInputTranslator struct {
 	session      KeyboardSessionState
 	doubleClick  *KeySequenceMatcher
 	lastSequence KeySequenceMatch
+	lastEvent    KeyboardEvent
 }
 
 func NewKeyboardInputTranslator(config Config) (*KeyboardInputTranslator, error) {
@@ -55,11 +56,19 @@ func (t *KeyboardInputTranslator) LastSequenceMatch() KeySequenceMatch {
 	return t.lastSequence
 }
 
+func (t *KeyboardInputTranslator) LastEvent() KeyboardEvent {
+	if t == nil {
+		return KeyboardEvent{}
+	}
+	return t.lastEvent
+}
+
 func (t *KeyboardInputTranslator) Apply(event KeyboardEvent) (KeyboardInputToken, bool, error) {
 	if t == nil {
 		return KeyboardInputToken{}, false, fmt.Errorf("keyboard input translator is nil")
 	}
 	event, err := t.session.ApplyEvent(event)
+	t.lastEvent = event
 	if err != nil {
 		return KeyboardInputToken{}, false, err
 	}

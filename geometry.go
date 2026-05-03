@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 type Span struct {
 	Start int `json:"start"`
@@ -87,4 +90,43 @@ func (g GridGeometry) CellCenterVirtual(column, row int) (float64, float64, erro
 		return 0, 0, err
 	}
 	return x + float64(g.Monitor.OriginX), y + float64(g.Monitor.OriginY), nil
+}
+
+type HiddenSubcellGeometry struct {
+	Cell        Rect    `json:"cell"`
+	CountX      int     `json:"count_x"`
+	CountY      int     `json:"count_y"`
+	StepX       float64 `json:"step_x"`
+	StepY       float64 `json:"step_y"`
+	PixelTarget int     `json:"pixel_target"`
+}
+
+func NewHiddenSubcellGeometry(cell Rect, subgridPixelSize int) (HiddenSubcellGeometry, error) {
+	if cell.Width <= 0 || cell.Height <= 0 {
+		return HiddenSubcellGeometry{}, fmt.Errorf("selected cell must have positive size, got %dx%d", cell.Width, cell.Height)
+	}
+	if subgridPixelSize <= 0 {
+		return HiddenSubcellGeometry{}, fmt.Errorf("subgrid pixel size must be positive, got %d", subgridPixelSize)
+	}
+	countX := hiddenSubcellCount(cell.Width, subgridPixelSize)
+	countY := hiddenSubcellCount(cell.Height, subgridPixelSize)
+	return HiddenSubcellGeometry{
+		Cell:        cell,
+		CountX:      countX,
+		CountY:      countY,
+		StepX:       float64(cell.Width) / float64(countX),
+		StepY:       float64(cell.Height) / float64(countY),
+		PixelTarget: subgridPixelSize,
+	}, nil
+}
+
+func hiddenSubcellCount(axisSize, subgridPixelSize int) int {
+	count := int(math.Round(float64(axisSize) / float64(subgridPixelSize)))
+	if count < 1 {
+		count = 1
+	}
+	if count > 26 {
+		count = 26
+	}
+	return count
 }

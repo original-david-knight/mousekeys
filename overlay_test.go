@@ -20,9 +20,11 @@ func (fixedOverlayRenderer) RenderMainGrid(monitor Monitor, gridSize int) (ARGBS
 }
 
 type recordingCoordinateOverlayRenderer struct {
-	mu       sync.Mutex
-	states   []CoordinateRenderState
-	monitors []Monitor
+	mu            sync.Mutex
+	states        []CoordinateRenderState
+	monitors      []Monitor
+	selectedCells []Rect
+	wait          chan struct{}
 }
 
 func (r *recordingCoordinateOverlayRenderer) RenderMainGrid(monitor Monitor, gridSize int) (ARGBSnapshot, error) {
@@ -31,12 +33,28 @@ func (r *recordingCoordinateOverlayRenderer) RenderMainGrid(monitor Monitor, gri
 
 func (r *recordingCoordinateOverlayRenderer) RenderCoordinateGrid(monitor Monitor, gridSize int, state CoordinateRenderState) (ARGBSnapshot, error) {
 	r.mu.Lock()
+	r.ensureWaitLocked()
 	r.states = append(r.states, state)
 	r.monitors = append(r.monitors, monitor)
+	r.wakeLocked()
 	r.mu.Unlock()
 	pixels := make([]ARGBPixel, monitor.LogicalWidth*monitor.LogicalHeight)
 	for i := range pixels {
 		pixels[i] = StraightARGB(64, uint8(len(state.Input)*80), 120, 220)
+	}
+	return NewARGBSnapshot(monitor.LogicalWidth, monitor.LogicalHeight, pixels)
+}
+
+func (r *recordingCoordinateOverlayRenderer) RenderSelectedCellOutline(monitor Monitor, cell Rect) (ARGBSnapshot, error) {
+	r.mu.Lock()
+	r.ensureWaitLocked()
+	r.selectedCells = append(r.selectedCells, cell)
+	r.monitors = append(r.monitors, monitor)
+	r.wakeLocked()
+	r.mu.Unlock()
+	pixels := make([]ARGBPixel, monitor.LogicalWidth*monitor.LogicalHeight)
+	for i := range pixels {
+		pixels[i] = StraightARGB(64, 200, 80, 220)
 	}
 	return NewARGBSnapshot(monitor.LogicalWidth, monitor.LogicalHeight, pixels)
 }
@@ -47,6 +65,46 @@ func (r *recordingCoordinateOverlayRenderer) States() []CoordinateRenderState {
 	out := make([]CoordinateRenderState, len(r.states))
 	copy(out, r.states)
 	return out
+}
+
+func (r *recordingCoordinateOverlayRenderer) SelectedCells() []Rect {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Rect, len(r.selectedCells))
+	copy(out, r.selectedCells)
+	return out
+}
+
+func (r *recordingCoordinateOverlayRenderer) WaitForSelectedCellCount(ctx context.Context, count int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		r.mu.Lock()
+		r.ensureWaitLocked()
+		if len(r.selectedCells) >= count {
+			r.mu.Unlock()
+			return nil
+		}
+		wait := r.wait
+		r.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
+func (r *recordingCoordinateOverlayRenderer) ensureWaitLocked() {
+	if r.wait == nil {
+		r.wait = make(chan struct{})
+	}
+}
+
+func (r *recordingCoordinateOverlayRenderer) wakeLocked() {
+	close(r.wait)
+	r.wait = make(chan struct{})
 }
 
 func TestLayerShellOverlayDriverShowHideToggleAndReuseWithFakes(t *testing.T) {
@@ -123,13 +181,13 @@ func TestLayerShellOverlayDriverCoordinateEntryFSMHUDBackspaceSelectionAndReset(
 	if !response.OK || !response.Active {
 		t.Fatalf("show response = %+v, want active", response)
 	}
-	waitForCondition(t, func() bool { return len(renderer.States()) >= 5 })
+	waitForCondition(t, func() bool { return len(renderer.States()) >= 4 && len(renderer.SelectedCells()) >= 1 })
 
 	states := renderer.States()
-	if len(states) != 5 {
-		t.Fatalf("coordinate render states = %+v, want initial + M + empty + M + MK only", states)
+	if len(states) != 4 {
+		t.Fatalf("coordinate render states = %+v, want initial + M + empty + M only", states)
 	}
-	wantInputs := []string{"", "M", "", "M", "MK"}
+	wantInputs := []string{"", "M", "", "M"}
 	for i, want := range wantInputs {
 		if states[i].Input != want {
 			t.Fatalf("state[%d].Input = %q, want %q; states=%+v", i, states[i].Input, want, states)
@@ -140,9 +198,6 @@ func TestLayerShellOverlayDriverCoordinateEntryFSMHUDBackspaceSelectionAndReset(
 	}
 	if states[2].HUDText() != "" || states[2].HasSelectedColumn {
 		t.Fatalf("backspace render state = %+v, want reset coordinate input", states[2])
-	}
-	if states[4].HUDText() != "MK" || !states[4].HasSelectedColumn || states[4].SelectedColumn != 12 {
-		t.Fatalf("second-letter render state = %+v, want MK with selected column M", states[4])
 	}
 
 	events := decodeTraceEvents(t, traceBytes.String())
@@ -169,6 +224,9 @@ func TestLayerShellOverlayDriverCoordinateEntryFSMHUDBackspaceSelectionAndReset(
 		int(bounds["width"].(float64)) != wantBounds.Width || int(bounds["height"].(float64)) != wantBounds.Height {
 		t.Fatalf("selected bounds = %+v, want %+v", bounds, wantBounds)
 	}
+	if selectedCells := renderer.SelectedCells(); len(selectedCells) != 1 || selectedCells[0] != wantBounds {
+		t.Fatalf("selected outline cells = %+v, want [%+v]", selectedCells, wantBounds)
+	}
 
 	response = controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
 	if !response.OK || response.Active || response.Action != "hidden" {
@@ -178,9 +236,218 @@ func TestLayerShellOverlayDriverCoordinateEntryFSMHUDBackspaceSelectionAndReset(
 	if !response.OK || !response.Active || response.Action != "shown" {
 		t.Fatalf("show after toggle response = %+v, want shown active", response)
 	}
-	waitForCondition(t, func() bool { return len(renderer.States()) >= 6 })
-	if last := renderer.States()[5]; last.Input != "" || last.HasSelectedColumn {
+	waitForCondition(t, func() bool { return len(renderer.States()) >= 5 })
+	if last := renderer.States()[4]; last.Input != "" || last.HasSelectedColumn {
 		t.Fatalf("show after reset render state = %+v, want empty coordinate state", last)
+	}
+}
+
+func TestLayerShellOverlayDriverSelectionMovesPointerAndRendersOnlyCellOutline(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, renderer, pointer, _ := newTestNavigationOverlayDriver(t, monitor)
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 2); err != nil {
+		t.Fatalf("selected-cell pointer move was not emitted: %v", err)
+	}
+	if err := renderer.WaitForSelectedCellCount(waitCtx, 1); err != nil {
+		t.Fatalf("selected-cell outline was not rendered: %v", err)
+	}
+
+	grid, err := NewGridGeometry(monitor, 26)
+	if err != nil {
+		t.Fatalf("NewGridGeometry returned error: %v", err)
+	}
+	cell, err := grid.Cell(12, 10)
+	if err != nil {
+		t.Fatalf("Cell returned error: %v", err)
+	}
+	centerX, centerY := cell.Center()
+	motions := recordedMotionPositions(pointer.Events())
+	if len(motions) != 1 || motions[0] != (PointerPosition{X: centerX, Y: centerY, OutputName: monitor.Name}) {
+		t.Fatalf("selected-cell pointer motions = %+v, want center %.1f,%.1f on %s", motions, centerX, centerY, monitor.Name)
+	}
+	if selected := renderer.SelectedCells(); len(selected) != 1 || selected[0] != cell {
+		t.Fatalf("selected outline cells = %+v, want [%+v]", selected, cell)
+	}
+	if states := renderer.States(); len(states) != 2 || states[0].Input != "" || states[1].Input != "M" {
+		t.Fatalf("coordinate grid states after selection = %+v, want only main grid and first-letter column state", states)
+	}
+}
+
+func TestLayerShellOverlayDriverHiddenSubcellMovementKeysMoveOutsideCell(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, _ := newTestNavigationOverlayDriver(t, monitor)
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "Right", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "Right", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "h", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "h", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "Down", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "Down", State: KeyReleased},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 10); err != nil {
+		t.Fatalf("hidden movement pointer targets were not emitted: %v", err)
+	}
+
+	motions := recordedMotionPositions(pointer.Events())
+	want := []PointerPosition{
+		{X: 125, Y: 105, OutputName: monitor.Name},
+		{X: 130, Y: 105, OutputName: monitor.Name},
+		{X: 135, Y: 105, OutputName: monitor.Name},
+		{X: 130, Y: 105, OutputName: monitor.Name},
+		{X: 130, Y: 110, OutputName: monitor.Name},
+	}
+	if !slices.Equal(motions, want) {
+		t.Fatalf("hidden movement motions = %+v, want %+v", motions, want)
+	}
+	grid, err := NewGridGeometry(monitor, 26)
+	if err != nil {
+		t.Fatalf("NewGridGeometry returned error: %v", err)
+	}
+	cell, err := grid.Cell(12, 10)
+	if err != nil {
+		t.Fatalf("Cell returned error: %v", err)
+	}
+	if motions[2].X <= float64(cell.X+cell.Width) {
+		t.Fatalf("Right arrow did not move outside selected cell: motion=%+v cell=%+v", motions[2], cell)
+	}
+}
+
+func TestLayerShellOverlayDriverHeldDirectionRepeatDelayAccelerationStopAndCancel(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, clock := newTestNavigationOverlayDriver(t, monitor)
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyPressed},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 4); err != nil {
+		t.Fatalf("initial selected/immediate pointer targets were not emitted: %v", err)
+	}
+	if len(recordedMotionPositions(pointer.Events())) != 2 {
+		t.Fatalf("unexpected motions before repeat delay: %+v", recordedMotionPositions(pointer.Events()))
+	}
+
+	clock.Advance(349 * time.Millisecond)
+	if motions := recordedMotionPositions(pointer.Events()); len(motions) != 2 {
+		t.Fatalf("repeat fired before initial delay: %+v", motions)
+	}
+	clock.Advance(time.Millisecond)
+	if err := pointer.WaitForEventCount(waitCtx, 6); err != nil {
+		t.Fatalf("first repeat tick was not emitted after delay: %v", err)
+	}
+	clock.Advance(50 * time.Millisecond)
+	if err := pointer.WaitForEventCount(waitCtx, 8); err != nil {
+		t.Fatalf("base repeat tick was not emitted: %v", err)
+	}
+	clock.Advance(450 * time.Millisecond)
+	if err := pointer.WaitForEventCount(waitCtx, 10); err != nil {
+		t.Fatalf("accelerated repeat tick was not emitted: %v", err)
+	}
+	motions := recordedMotionPositions(pointer.Events())
+	if dx1, dx2, dx3 := motions[2].X-motions[1].X, motions[3].X-motions[2].X, motions[4].X-motions[3].X; dx1 != 5 || dx2 != 5 || dx3 != 10 {
+		t.Fatalf("repeat deltas = %.1f, %.1f, %.1f; want 5, 5, 10", dx1, dx2, dx3)
+	}
+
+	wayland.keyboard.Enqueue(KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyReleased})
+	if err := wayland.keyboard.WaitForPendingEvents(waitCtx, 0); err != nil {
+		t.Fatalf("L release was not consumed: %v", err)
+	}
+	afterRelease := len(pointer.Events())
+	clock.Advance(time.Second)
+	if got := len(pointer.Events()); got != afterRelease {
+		t.Fatalf("repeat emitted after key release: before=%d after=%d", afterRelease, got)
+	}
+
+	wayland.keyboard.Enqueue(KeyboardEvent{Kind: KeyboardEventKey, Key: "Right", State: KeyPressed})
+	if err := pointer.WaitForEventCount(waitCtx, afterRelease+2); err != nil {
+		t.Fatalf("new direction immediate target was not emitted: %v", err)
+	}
+	afterRightPress := len(pointer.Events())
+	wayland.keyboard.Enqueue(KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed})
+	if err := pointer.WaitForEventCount(waitCtx, afterRightPress+2); err != nil {
+		t.Fatalf("different direction immediate target was not emitted: %v", err)
+	}
+	clock.Advance(349 * time.Millisecond)
+	if got := len(pointer.Events()); got != afterRightPress+2 {
+		t.Fatalf("new direction repeat fired before delay or old repeat was not canceled: got=%d want=%d", got, afterRightPress+2)
+	}
+	clock.Advance(time.Millisecond)
+	if err := pointer.WaitForEventCount(waitCtx, afterRightPress+4); err != nil {
+		t.Fatalf("new direction repeat did not start after fresh delay: %v", err)
+	}
+	motions = recordedMotionPositions(pointer.Events())
+	last := motions[len(motions)-1]
+	prev := motions[len(motions)-2]
+	if last.Y >= prev.Y {
+		t.Fatalf("fresh K repeat did not move upward: previous=%+v last=%+v", prev, last)
+	}
+}
+
+func TestLayerShellOverlayDriverIgnoresCompositorRepeatForDirectionKeys(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, _ := newTestNavigationOverlayDriver(t, monitor)
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "L", State: KeyPressed},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 4); err != nil {
+		t.Fatalf("initial selected/immediate pointer targets were not emitted: %v", err)
+	}
+	if err := wayland.keyboard.WaitForPendingEvents(waitCtx, 0); err != nil {
+		t.Fatalf("keyboard repeat event was not consumed: %v", err)
+	}
+	if motions := recordedMotionPositions(pointer.Events()); len(motions) != 2 {
+		t.Fatalf("compositor repeated direction emitted duplicate immediate movement: %+v", motions)
 	}
 }
 
@@ -323,6 +590,41 @@ func newTestLayerShellOverlayDriver(t *testing.T, monitor Monitor) (*layerShellO
 		t.Fatalf("newLayerShellOverlayDriver returned error: %v", err)
 	}
 	return driver, wayland, traceBytes
+}
+
+func newTestNavigationOverlayDriver(t *testing.T, monitor Monitor) (*layerShellOverlayDriver, *fakeWaylandBackend, *recordingCoordinateOverlayRenderer, *pointerRecorder, *fakeClock) {
+	t.Helper()
+	trace := NewTraceRecorder(nil, nil)
+	config := DefaultConfig()
+	config.Grid.Size = 26
+	config.Grid.SubgridPixelSize = 5
+	if err := config.Validate(); err != nil {
+		t.Fatalf("test config Validate returned error: %v", err)
+	}
+	clock := newFakeClock(time.Unix(100, 0), trace)
+	pointer := newPointerRecorder(trace)
+	pointer.now = clock.Now
+	wayland := newFakeWaylandBackend(trace)
+	wayland.keyboard.SetBlocking(true)
+	renderer := &recordingCoordinateOverlayRenderer{}
+	driver, err := newLayerShellOverlayDriverWithOptions(newFakeHyprlandIPC(monitor), wayland, renderer, config, trace, layerShellOverlayDriverOptions{
+		Pointer: pointer,
+		Clock:   clock,
+	})
+	if err != nil {
+		t.Fatalf("newLayerShellOverlayDriverWithOptions returned error: %v", err)
+	}
+	return driver, wayland, renderer, pointer, clock
+}
+
+func recordedMotionPositions(events []recordedPointerEvent) []PointerPosition {
+	var positions []PointerPosition
+	for _, event := range events {
+		if event.Kind == "motion" {
+			positions = append(positions, event.Motion.Position)
+		}
+	}
+	return positions
 }
 
 type lockedTraceBuffer struct {

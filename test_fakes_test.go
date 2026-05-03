@@ -283,21 +283,26 @@ func (s *fakeOverlayLifecycleEventSource) enqueue(event OverlayLifecycleEvent) {
 }
 
 type fakeKeyboardEventSource struct {
-	mu        sync.Mutex
-	trace     *TraceRecorder
-	events    []KeyboardEvent
-	showCount int
-	closed    bool
+	mu             sync.Mutex
+	trace          *TraceRecorder
+	events         []KeyboardEvent
+	showCount      int
+	closed         bool
+	blockWhenEmpty bool
+	wait           chan struct{}
 }
 
 func newFakeKeyboardEventSource(trace *TraceRecorder) *fakeKeyboardEventSource {
-	return &fakeKeyboardEventSource{trace: trace}
+	return &fakeKeyboardEventSource{trace: trace, wait: make(chan struct{})}
 }
 
 func (f *fakeKeyboardEventSource) BeginShow() {
 	f.mu.Lock()
 	f.showCount++
 	f.closed = false
+	if f.wait == nil {
+		f.wait = make(chan struct{})
+	}
 	f.mu.Unlock()
 }
 
@@ -311,6 +316,14 @@ func (f *fakeKeyboardEventSource) Enqueue(events ...KeyboardEvent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, events...)
+	f.wakeLocked()
+}
+
+func (f *fakeKeyboardEventSource) SetBlocking(block bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockWhenEmpty = block
+	f.wakeLocked()
 }
 
 func (f *fakeKeyboardEventSource) PendingEvents() int {
@@ -319,22 +332,60 @@ func (f *fakeKeyboardEventSource) PendingEvents() int {
 	return len(f.events)
 }
 
+func (f *fakeKeyboardEventSource) WaitForPendingEvents(ctx context.Context, count int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		f.mu.Lock()
+		if len(f.events) == count {
+			f.mu.Unlock()
+			return nil
+		}
+		wait := f.wait
+		f.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
 func (f *fakeKeyboardEventSource) NextKeyboardEvent(ctx context.Context) (KeyboardEvent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return KeyboardEvent{}, err
 	}
-	f.mu.Lock()
-	if f.closed {
+	var event KeyboardEvent
+	for {
+		f.mu.Lock()
+		if f.closed {
+			f.mu.Unlock()
+			return KeyboardEvent{}, io.ErrClosedPipe
+		}
+		if len(f.events) > 0 {
+			event = f.events[0]
+			f.events = f.events[1:]
+			f.wakeLocked()
+			f.mu.Unlock()
+			break
+		}
+		if !f.blockWhenEmpty {
+			f.mu.Unlock()
+			return KeyboardEvent{}, io.EOF
+		}
+		wait := f.wait
 		f.mu.Unlock()
-		return KeyboardEvent{}, io.ErrClosedPipe
+
+		select {
+		case <-ctx.Done():
+			return KeyboardEvent{}, ctx.Err()
+		case <-wait:
+		}
 	}
-	if len(f.events) == 0 {
-		f.mu.Unlock()
-		return KeyboardEvent{}, io.EOF
-	}
-	event := f.events[0]
-	f.events = f.events[1:]
-	f.mu.Unlock()
 
 	fields := map[string]any{
 		"kind":      event.Kind,
@@ -370,7 +421,13 @@ func (f *fakeKeyboardEventSource) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = true
+	f.wakeLocked()
 	return nil
+}
+
+func (f *fakeKeyboardEventSource) wakeLocked() {
+	close(f.wait)
+	f.wait = make(chan struct{})
 }
 
 type recordedPointerEvent struct {
@@ -385,6 +442,7 @@ type pointerRecorder struct {
 	mu           sync.Mutex
 	trace        *TraceRecorder
 	events       []recordedPointerEvent
+	wait         chan struct{}
 	now          func() time.Time
 	lastPosition PointerPosition
 	hasPosition  bool
@@ -392,7 +450,7 @@ type pointerRecorder struct {
 }
 
 func newPointerRecorder(trace *TraceRecorder) *pointerRecorder {
-	return &pointerRecorder{trace: trace, now: time.Now}
+	return &pointerRecorder{trace: trace, wait: make(chan struct{}), now: time.Now}
 }
 
 func (p *pointerRecorder) MovePointer(ctx context.Context, motion PointerMotion) error {
@@ -403,6 +461,7 @@ func (p *pointerRecorder) MovePointer(ctx context.Context, motion PointerMotion)
 	p.events = append(p.events, recordedPointerEvent{Kind: "motion", Motion: motion, OrderIndex: len(p.events)})
 	p.lastPosition = motion.Position
 	p.hasPosition = true
+	p.wakeLocked()
 	p.mu.Unlock()
 	p.trace.Record(tracePointerMotion, map[string]any{"position": motion.Position, "at": motion.At})
 	return nil
@@ -414,6 +473,7 @@ func (p *pointerRecorder) Button(ctx context.Context, button PointerButtonEvent)
 	}
 	p.mu.Lock()
 	p.events = append(p.events, recordedPointerEvent{Kind: "button", Button: button, OrderIndex: len(p.events)})
+	p.wakeLocked()
 	p.mu.Unlock()
 	p.trace.Record(tracePointerButton, map[string]any{
 		"button":      button.Button,
@@ -433,6 +493,7 @@ func (p *pointerRecorder) Frame(ctx context.Context, frame PointerFrame) error {
 	}
 	p.mu.Lock()
 	p.events = append(p.events, recordedPointerEvent{Kind: "frame", Frame: frame, OrderIndex: len(p.events)})
+	p.wakeLocked()
 	p.mu.Unlock()
 	p.trace.Record(tracePointerFrame, map[string]any{"output_name": frame.OutputName, "at": frame.At})
 	return nil
@@ -527,6 +588,32 @@ func (p *pointerRecorder) Events() []recordedPointerEvent {
 	out := make([]recordedPointerEvent, len(p.events))
 	copy(out, p.events)
 	return out
+}
+
+func (p *pointerRecorder) WaitForEventCount(ctx context.Context, count int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		p.mu.Lock()
+		if len(p.events) >= count {
+			p.mu.Unlock()
+			return nil
+		}
+		wait := p.wait
+		p.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
+func (p *pointerRecorder) wakeLocked() {
+	close(p.wait)
+	p.wait = make(chan struct{})
 }
 
 type fakeRendererBufferSink struct {

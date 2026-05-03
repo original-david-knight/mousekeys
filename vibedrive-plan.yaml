@@ -476,7 +476,7 @@ tasks:
         emits one pointer target for the final accelerated position. Releasing
         the key stops immediately. Pressing a different direction cancels the old
         repeat and starts a new delay/ramp.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - main-grid-coordinate-entry

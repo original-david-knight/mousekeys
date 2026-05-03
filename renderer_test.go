@@ -48,6 +48,31 @@ func TestSoftwareRendererMainGridDeterministicAndStyled(t *testing.T) {
 	}
 }
 
+func TestSoftwareRendererSelectedCellOutlineOnly(t *testing.T) {
+	renderer := mustSoftwareRenderer(t, RendererStyle{
+		GridOpacity:   0.55,
+		GridLineWidth: 2,
+		LabelFontSize: 8,
+		HUDFontSize:   10,
+	})
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	cell := Rect{X: 120, Y: 100, Width: 10, Height: 10}
+
+	snapshot, err := renderer.RenderSelectedCellOutline(monitor, cell)
+	if err != nil {
+		t.Fatalf("RenderSelectedCellOutline returned error: %v", err)
+	}
+	if edge := mustPixelAt(t, snapshot, cell.X, cell.Y+cell.Height/2); edge.A() == 0 || edge.B() <= edge.R() {
+		t.Fatalf("selected-cell outline edge is not visible/bluish: %#08x", uint32(edge))
+	}
+	if center := mustPixelAt(t, snapshot, cell.X+cell.Width/2, cell.Y+cell.Height/2); center.A() != 0 {
+		t.Fatalf("selected-cell outline filled the cell center: %#08x", uint32(center))
+	}
+	if outside := mustPixelAt(t, snapshot, 30, 30); outside.A() != 0 {
+		t.Fatalf("selected-cell outline rendered outside the selected cell: %#08x", uint32(outside))
+	}
+}
+
 func TestSoftwareRendererLabelsUseHaloWithoutBoxes(t *testing.T) {
 	renderer := mustSoftwareRenderer(t, RendererStyle{
 		GridOpacity:   0,

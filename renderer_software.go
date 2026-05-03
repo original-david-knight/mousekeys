@@ -221,6 +221,24 @@ func (r *SoftwareRenderer) RenderGridWithState(grid GridGeometry, state Coordina
 	return canvas.snapshot(), nil
 }
 
+func (r *SoftwareRenderer) RenderSelectedCellOutline(monitor Monitor, cell Rect) (ARGBSnapshot, error) {
+	if r == nil {
+		return ARGBSnapshot{}, fmt.Errorf("software renderer is nil")
+	}
+	if err := monitor.Validate(); err != nil {
+		return ARGBSnapshot{}, err
+	}
+	if cell.Width <= 0 || cell.Height <= 0 {
+		return ARGBSnapshot{}, fmt.Errorf("selected cell outline requires positive bounds, got %+v", cell)
+	}
+	canvas, err := newARGBCanvas(monitor.LogicalWidth, monitor.LogicalHeight)
+	if err != nil {
+		return ARGBSnapshot{}, err
+	}
+	r.drawSelectedCellOutline(canvas, cell)
+	return canvas.snapshot(), nil
+}
+
 func (r *SoftwareRenderer) RenderHUD(width, height int, text string) (ARGBSnapshot, error) {
 	if r == nil {
 		return ARGBSnapshot{}, fmt.Errorf("software renderer is nil")
@@ -406,6 +424,31 @@ func (r *SoftwareRenderer) drawSelectedColumn(canvas *argbCanvas, grid GridGeome
 	r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
 		X: column.Start, Y: bottomRow.Start, Width: column.Size(), Height: bottomRow.Size(),
 	}, radius)
+}
+
+func (r *SoftwareRenderer) drawSelectedCellOutline(canvas *argbCanvas, cell Rect) {
+	haloWidth := r.gridHaloWidth()
+	coreWidth := r.style.GridLineWidth
+	halo := scalePixelAlpha(rendererGridHaloColor, minFloat64(1.0, r.style.GridOpacity*1.35))
+	core := scalePixelAlpha(rendererGridCoreColor, minFloat64(1.0, r.style.GridOpacity*1.45))
+	x0 := cell.X
+	x1 := cell.X + cell.Width
+	y0 := cell.Y
+	y1 := cell.Y + cell.Height
+
+	for _, x := range []int{x0, x1} {
+		r.drawVerticalStrokeRange(canvas, x, haloWidth, y0, y1, halo)
+		r.drawVerticalStrokeRange(canvas, x, coreWidth, y0, y1, core)
+	}
+	for _, y := range []int{y0, y1} {
+		r.drawHorizontalStrokeRange(canvas, y, haloWidth, x0, x1, halo)
+		r.drawHorizontalStrokeRange(canvas, y, coreWidth, x0, x1, core)
+	}
+}
+
+func (r *SoftwareRenderer) drawVerticalStrokeRange(canvas *argbCanvas, center, width, y0, y1 int, color ARGBPixel) {
+	start, end := strokeRange(center, width, canvas.width)
+	canvas.fillRect(start, y0, end, y1, color)
 }
 
 func (r *SoftwareRenderer) drawHorizontalStrokeRange(canvas *argbCanvas, center, width, x0, x1 int, color ARGBPixel) {

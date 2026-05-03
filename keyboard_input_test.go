@@ -128,6 +128,32 @@ func TestKeyboardInputTranslatorRejectsCtrlAltSuperChords(t *testing.T) {
 	}
 }
 
+func TestKeyboardInputTranslatorSuppressesCompositorRepeatForCommandsAndLetters(t *testing.T) {
+	for _, event := range []KeyboardEvent{
+		{Kind: KeyboardEventKey, Key: "Escape", State: KeyPressed},
+		{Kind: KeyboardEventKey, Key: "BackSpace", State: KeyPressed},
+		{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
+		{Kind: KeyboardEventKey, Key: "M", State: KeyPressed, Modifiers: ModifierState{Shift: true}},
+	} {
+		t.Run(event.Key, func(t *testing.T) {
+			translator := newTestKeyboardInputTranslator(t)
+			if _, ok, err := translator.Apply(event); err != nil || !ok {
+				t.Fatalf("initial Apply(%+v) = ok %v err %v, want token", event, ok, err)
+			}
+			repeated, ok, err := translator.Apply(event)
+			if err != nil {
+				t.Fatalf("repeated Apply(%+v) returned error: %v", event, err)
+			}
+			if ok {
+				t.Fatalf("repeated Apply(%+v) emitted token %+v", event, repeated)
+			}
+			if !translator.LastEvent().Repeated {
+				t.Fatalf("translator did not mark repeated event for %+v", event)
+			}
+		})
+	}
+}
+
 func TestKeyboardSessionStateResetPathsClearPressedAndHeldRepeat(t *testing.T) {
 	resetEvents := []KeyboardEvent{
 		{Kind: KeyboardEventLeave},

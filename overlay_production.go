@@ -11,11 +11,18 @@ func newProductionOverlayDriver(getenv getenvFunc, config Config, trace *TraceRe
 	if err != nil {
 		return nil, fmt.Errorf("create overlay renderer: %w", err)
 	}
+	pointer, err := newProductionPointerSynthesizer(getenv, trace)
+	if err != nil {
+		return nil, fmt.Errorf("create pointer synthesizer: %w", err)
+	}
 	backend := &lazyWaylandOverlayBackend{
 		getenv: getenv,
 		trace:  trace,
 	}
-	return newLayerShellOverlayDriver(NewHyprlandIPCClient(getenv), backend, renderer, config, trace)
+	return newLayerShellOverlayDriverWithOptions(NewHyprlandIPCClient(getenv), backend, renderer, config, trace, layerShellOverlayDriverOptions{
+		Pointer: pointer,
+		Clock:   realClock{},
+	})
 }
 
 type lazyWaylandOverlayBackend struct {

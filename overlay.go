@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 type overlayGridRenderer interface {
@@ -16,11 +17,17 @@ type overlayCoordinateGridRenderer interface {
 	RenderCoordinateGrid(monitor Monitor, gridSize int, state CoordinateRenderState) (ARGBSnapshot, error)
 }
 
+type overlaySelectedCellRenderer interface {
+	RenderSelectedCellOutline(monitor Monitor, cell Rect) (ARGBSnapshot, error)
+}
+
 type layerShellOverlayDriver struct {
 	mu       sync.Mutex
 	monitor  FocusedMonitorLookup
 	wayland  WaylandOverlayBackend
 	renderer overlayGridRenderer
+	pointer  PointerActionSynthesizer
+	clock    ClockTimerSource
 	config   Config
 	trace    *TraceRecorder
 	session  *overlaySession
@@ -28,17 +35,37 @@ type layerShellOverlayDriver struct {
 }
 
 type overlaySession struct {
-	id         int
-	ctx        context.Context
-	cancel     context.CancelFunc
-	monitor    Monitor
-	surface    OverlaySurface
-	keyboard   KeyboardEventSource
-	lifecycle  OverlayLifecycleEventSource
-	coordinate coordinateEntryState
+	id          int
+	ctx         context.Context
+	cancel      context.CancelFunc
+	monitor     Monitor
+	surface     OverlaySurface
+	keyboard    KeyboardEventSource
+	lifecycle   OverlayLifecycleEventSource
+	coordinate  coordinateEntryState
+	hasSelected bool
+	selected    selectedCell
+	navigator   hiddenSubcellNavigator
+	repeat      *heldDirectionRepeat
+}
+
+type heldDirectionRepeat struct {
+	key       string
+	direction hiddenDirection
+	timer     TimerHandle
+	cancel    chan struct{}
+}
+
+type layerShellOverlayDriverOptions struct {
+	Pointer PointerActionSynthesizer
+	Clock   ClockTimerSource
 }
 
 func newLayerShellOverlayDriver(monitor FocusedMonitorLookup, wayland WaylandOverlayBackend, renderer overlayGridRenderer, config Config, trace *TraceRecorder) (*layerShellOverlayDriver, error) {
+	return newLayerShellOverlayDriverWithOptions(monitor, wayland, renderer, config, trace, layerShellOverlayDriverOptions{})
+}
+
+func newLayerShellOverlayDriverWithOptions(monitor FocusedMonitorLookup, wayland WaylandOverlayBackend, renderer overlayGridRenderer, config Config, trace *TraceRecorder, opts layerShellOverlayDriverOptions) (*layerShellOverlayDriver, error) {
 	if monitor == nil {
 		return nil, fmt.Errorf("focused monitor lookup is required")
 	}
@@ -51,10 +78,20 @@ func newLayerShellOverlayDriver(monitor FocusedMonitorLookup, wayland WaylandOve
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	pointer := opts.Pointer
+	if pointer == nil {
+		pointer = noopPointerActionSynthesizer{}
+	}
+	clock := opts.Clock
+	if clock == nil {
+		clock = realClock{}
+	}
 	return &layerShellOverlayDriver{
 		monitor:  monitor,
 		wayland:  wayland,
 		renderer: renderer,
+		pointer:  pointer,
+		clock:    clock,
 		config:   config,
 		trace:    trace,
 	}, nil
@@ -132,6 +169,9 @@ func (d *layerShellOverlayDriver) OverlayActive() bool {
 
 func (d *layerShellOverlayDriver) CloseOverlay(ctx context.Context) error {
 	err := d.finishActiveSession(ctx, overlayCancelDaemonShutdown, true)
+	if closer, ok := d.pointer.(interface{ Close(context.Context) error }); ok {
+		err = errors.Join(err, closer.Close(ctx))
+	}
 	return errors.Join(err, d.wayland.Close(ctx))
 }
 
@@ -157,9 +197,19 @@ func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
 			_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
 			return
 		}
+		event = translator.LastEvent()
 		if event.Kind == KeyboardEventDestroy {
 			_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
 			return
+		}
+		consumed, err := d.handleKeyboardEvent(session, event)
+		if err != nil {
+			d.recordOverlayError("keyboard", err)
+			_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
+			return
+		}
+		if consumed {
+			continue
 		}
 		if ok {
 			d.trace.Record(traceKeyboardToken, map[string]any{
@@ -247,6 +297,28 @@ func (d *layerShellOverlayDriver) reconfigureActiveSession(session *overlaySessi
 		return nil
 	}
 	session.monitor = monitor
+	if session.hasSelected {
+		grid, err := NewGridGeometry(monitor, d.config.Grid.Size)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		cell, err := session.coordinate.SelectedCell(grid)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		navigator, err := newHiddenSubcellNavigator(monitor, cell, d.config.Grid.SubgridPixelSize)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		d.stopHeldDirectionRepeatLocked(session)
+		session.selected = cell
+		session.navigator = navigator
+		d.mu.Unlock()
+		return d.configureAndRenderSelectedCell(session.ctx, session, monitor, cell.Bounds)
+	}
 	state := session.coordinate.RenderState(d.config.Grid.Size)
 	d.mu.Unlock()
 	return d.configureAndRender(session.ctx, session, monitor, state)
@@ -263,6 +335,17 @@ func (d *layerShellOverlayDriver) configureAndRender(ctx context.Context, sessio
 	return session.surface.Render(ctx, buffer)
 }
 
+func (d *layerShellOverlayDriver) configureAndRenderSelectedCell(ctx context.Context, session *overlaySession, monitor Monitor, cell Rect) error {
+	if err := session.surface.Configure(ctx, monitor.LogicalWidth, monitor.LogicalHeight, monitor.Scale); err != nil {
+		return err
+	}
+	buffer, err := d.renderSelectedCellBuffer(monitor, cell)
+	if err != nil {
+		return err
+	}
+	return session.surface.Render(ctx, buffer)
+}
+
 func (d *layerShellOverlayDriver) renderGridBuffer(monitor Monitor, state CoordinateRenderState) (ARGBSnapshot, error) {
 	if renderer, ok := d.renderer.(overlayCoordinateGridRenderer); ok {
 		return renderer.RenderCoordinateGrid(monitor, d.config.Grid.Size, state)
@@ -271,6 +354,13 @@ func (d *layerShellOverlayDriver) renderGridBuffer(monitor Monitor, state Coordi
 		return ARGBSnapshot{}, fmt.Errorf("overlay renderer does not support coordinate render state")
 	}
 	return d.renderer.RenderMainGrid(monitor, d.config.Grid.Size)
+}
+
+func (d *layerShellOverlayDriver) renderSelectedCellBuffer(monitor Monitor, cell Rect) (ARGBSnapshot, error) {
+	if renderer, ok := d.renderer.(overlaySelectedCellRenderer); ok {
+		return renderer.RenderSelectedCellOutline(monitor, cell)
+	}
+	return ARGBSnapshot{}, fmt.Errorf("overlay renderer does not support selected-cell outline rendering")
 }
 
 func (d *layerShellOverlayDriver) handleKeyboardToken(session *overlaySession, token KeyboardInputToken) error {
@@ -317,6 +407,14 @@ func (d *layerShellOverlayDriver) handleCoordinateLetter(session *overlaySession
 			d.mu.Unlock()
 			return err
 		}
+		navigator, err := newHiddenSubcellNavigator(monitor, cell, d.config.Grid.SubgridPixelSize)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		session.hasSelected = true
+		session.selected = cell
+		session.navigator = navigator
 	}
 	d.mu.Unlock()
 
@@ -337,7 +435,12 @@ func (d *layerShellOverlayDriver) handleCoordinateLetter(session *overlaySession
 			"center_virtual_x": cell.CenterVirtualX,
 			"center_virtual_y": cell.CenterVirtualY,
 			"monitor":          monitor,
+			"subcells":         cellSubcellTrace(cell.Bounds, d.config.Grid.SubgridPixelSize),
 		})
+		if err := d.pointer.MoveAbsolute(session.ctx, cell.CenterLocalX, cell.CenterLocalY, monitor); err != nil {
+			return err
+		}
+		return d.configureAndRenderSelectedCell(session.ctx, session, monitor, cell.Bounds)
 	}
 	return d.configureAndRender(session.ctx, session, monitor, state)
 }
@@ -352,6 +455,10 @@ func (d *layerShellOverlayDriver) handleCoordinateBackspace(session *overlaySess
 		d.mu.Unlock()
 		return nil
 	}
+	d.stopHeldDirectionRepeatLocked(session)
+	session.hasSelected = false
+	session.selected = selectedCell{}
+	session.navigator = hiddenSubcellNavigator{}
 	monitor := session.monitor
 	state := session.coordinate.RenderState(d.config.Grid.Size)
 	input := session.coordinate.Input()
@@ -362,6 +469,152 @@ func (d *layerShellOverlayDriver) handleCoordinateBackspace(session *overlaySess
 		"hud":   state.HUDText(),
 	})
 	return d.configureAndRender(session.ctx, session, monitor, state)
+}
+
+func (d *layerShellOverlayDriver) handleKeyboardEvent(session *overlaySession, event KeyboardEvent) (bool, error) {
+	switch event.Kind {
+	case KeyboardEventKeymap, KeyboardEventLeave:
+		d.mu.Lock()
+		if d.session == session {
+			d.stopHeldDirectionRepeatLocked(session)
+		}
+		d.mu.Unlock()
+		return false, nil
+	case KeyboardEventKey:
+	default:
+		return false, nil
+	}
+
+	direction, ok := directionFromKeyEvent(event)
+	if !ok {
+		return false, nil
+	}
+	d.mu.Lock()
+	selected := d.session == session && session.hasSelected
+	d.mu.Unlock()
+	if !selected {
+		return false, nil
+	}
+
+	switch event.State {
+	case KeyPressed:
+		if event.Repeated {
+			return true, nil
+		}
+		d.startHeldDirectionRepeat(session, direction, event.Key)
+		if err := d.moveHiddenSubcell(session, direction, 1); err != nil {
+			d.stopHeldDirectionRepeatForKey(session, event.Key)
+			return true, err
+		}
+		return true, nil
+	case KeyReleased:
+		d.stopHeldDirectionRepeatForKey(session, event.Key)
+		return true, nil
+	default:
+		return true, nil
+	}
+}
+
+func (d *layerShellOverlayDriver) moveHiddenSubcell(session *overlaySession, direction hiddenDirection, subcells int) error {
+	d.mu.Lock()
+	if d.session != session || !session.hasSelected {
+		d.mu.Unlock()
+		return nil
+	}
+	x, y, err := session.navigator.Move(direction, subcells)
+	monitor := session.monitor
+	d.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return d.pointer.MoveAbsolute(session.ctx, x, y, monitor)
+}
+
+func (d *layerShellOverlayDriver) startHeldDirectionRepeat(session *overlaySession, direction hiddenDirection, key string) {
+	d.mu.Lock()
+	if d.session != session || !session.hasSelected {
+		d.mu.Unlock()
+		return
+	}
+	d.stopHeldDirectionRepeatLocked(session)
+	repeat := &heldDirectionRepeat{
+		key:       key,
+		direction: direction,
+		cancel:    make(chan struct{}),
+	}
+	session.repeat = repeat
+	startedAt := d.clock.Now()
+	timer := d.clock.NewTimer(heldDirectionInitialDelay)
+	repeat.timer = timer
+	d.mu.Unlock()
+
+	go d.runHeldDirectionRepeat(session, repeat, startedAt, timer)
+}
+
+func (d *layerShellOverlayDriver) runHeldDirectionRepeat(session *overlaySession, repeat *heldDirectionRepeat, startedAt time.Time, timer TimerHandle) {
+	defer timer.Stop()
+	for {
+		select {
+		case <-repeat.cancel:
+			return
+		case at := <-timer.C():
+			select {
+			case <-repeat.cancel:
+				return
+			default:
+			}
+			stage := heldDirectionRepeatStageForElapsed(at.Sub(startedAt))
+			timer.Reset(stage.Interval)
+			if err := d.moveHiddenSubcell(session, repeat.direction, stage.Subcells); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					d.recordOverlayError("held_repeat", err)
+				}
+				d.stopHeldDirectionRepeat(session, repeat)
+				return
+			}
+		}
+	}
+}
+
+func (d *layerShellOverlayDriver) stopHeldDirectionRepeatForKey(session *overlaySession, key string) {
+	d.mu.Lock()
+	if d.session == session && session.repeat != nil && session.repeat.key == key {
+		d.stopHeldDirectionRepeatLocked(session)
+	}
+	d.mu.Unlock()
+}
+
+func (d *layerShellOverlayDriver) stopHeldDirectionRepeat(session *overlaySession, repeat *heldDirectionRepeat) {
+	d.mu.Lock()
+	if d.session == session && session.repeat == repeat {
+		d.stopHeldDirectionRepeatLocked(session)
+	}
+	d.mu.Unlock()
+}
+
+func (d *layerShellOverlayDriver) stopHeldDirectionRepeatLocked(session *overlaySession) {
+	if session == nil || session.repeat == nil {
+		return
+	}
+	if session.repeat.timer != nil {
+		session.repeat.timer.Stop()
+	}
+	close(session.repeat.cancel)
+	session.repeat = nil
+}
+
+func cellSubcellTrace(cell Rect, subgridPixelSize int) map[string]any {
+	grid, err := NewHiddenSubcellGeometry(cell, subgridPixelSize)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return map[string]any{
+		"count_x":      grid.CountX,
+		"count_y":      grid.CountY,
+		"step_x":       grid.StepX,
+		"step_y":       grid.StepY,
+		"pixel_target": grid.PixelTarget,
+	}
 }
 
 func (d *layerShellOverlayDriver) finishActiveSession(ctx context.Context, reason overlayCancelReason, unmap bool) error {
@@ -384,6 +637,7 @@ func (d *layerShellOverlayDriver) finishSession(ctx context.Context, session *ov
 		d.mu.Unlock()
 		return nil
 	}
+	d.stopHeldDirectionRepeatLocked(session)
 	d.session = nil
 	d.mu.Unlock()
 
@@ -430,6 +684,39 @@ func (d *layerShellOverlayDriver) recordOverlayError(source string, err error) {
 		"source": source,
 		"error":  err.Error(),
 	})
+}
+
+type noopPointerActionSynthesizer struct{}
+
+func (noopPointerActionSynthesizer) MoveAbsolute(ctx context.Context, x, y float64, output Monitor) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return output.Validate()
+}
+
+func (noopPointerActionSynthesizer) LeftClick(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx.Err()
+}
+
+func (noopPointerActionSynthesizer) RightClick(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx.Err()
+}
+
+func (noopPointerActionSynthesizer) DoubleClick(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx.Err()
 }
 
 type overlayEventQueue[T any] struct {
