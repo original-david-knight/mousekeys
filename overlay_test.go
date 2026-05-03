@@ -451,6 +451,202 @@ func TestLayerShellOverlayDriverIgnoresCompositorRepeatForDirectionKeys(t *testi
 	}
 }
 
+func TestLayerShellOverlayDriverSpaceTimeoutLeftClickAndStayActive(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, clock, traceBytes := newTestClickOverlayDriver(t, monitor, func(config *Config) {
+		config.Behavior.StayActive = true
+		config.Behavior.DoubleClickTimeoutMS = 250
+	})
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 2); err != nil {
+		t.Fatalf("selected-cell pointer move was not emitted: %v", err)
+	}
+	if err := wayland.keyboard.WaitForPendingEvents(waitCtx, 0); err != nil {
+		t.Fatalf("space press was not consumed: %v", err)
+	}
+	if clock.TimerCount() != 1 || clock.ActiveTimerCount() != 1 {
+		t.Fatalf("double-click timer state = total %d active %d, want one active timer", clock.TimerCount(), clock.ActiveTimerCount())
+	}
+	if buttons := recordedButtonEvents(pointer.Events()); len(buttons) != 0 {
+		t.Fatalf("left click fired before timeout: %+v", buttons)
+	}
+
+	clock.Advance(249 * time.Millisecond)
+	if buttons := recordedButtonEvents(pointer.Events()); len(buttons) != 0 {
+		t.Fatalf("left click fired before configured timeout: %+v", buttons)
+	}
+	clock.Advance(time.Millisecond)
+	if err := pointer.WaitForEventCount(waitCtx, 5); err != nil {
+		t.Fatalf("left click was not emitted after timeout: %v", err)
+	}
+	if err := wayland.keyboard.WaitForShowCount(waitCtx, 2); err != nil {
+		t.Fatalf("stay-active grid was not recreated: %v", err)
+	}
+	if clock.ActiveTimerCount() != 0 {
+		t.Fatalf("double-click timer still active after click: %d", clock.ActiveTimerCount())
+	}
+	motions := recordedMotionPositions(pointer.Events())
+	buttons := recordedButtonEvents(pointer.Events())
+	assertButtonClick(t, buttons, PointerButtonLeft, 1, motions[0])
+
+	traceEvents := decodeTraceEvents(t, traceBytes.String())
+	assertOverlayUnmapBeforePointerButtons(t, traceEvents)
+	assertStayActiveResetAfterClickComplete(t, traceEvents)
+}
+
+func TestLayerShellOverlayDriverSpaceSpaceDoubleClickBeforeTimeout(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, clock, traceBytes := newTestClickOverlayDriver(t, monitor, func(config *Config) {
+		config.Behavior.StayActive = true
+		config.Behavior.DoubleClickTimeoutMS = 250
+	})
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 8); err != nil {
+		t.Fatalf("double click was not emitted: %v", err)
+	}
+	if err := wayland.keyboard.WaitForShowCount(waitCtx, 2); err != nil {
+		t.Fatalf("stay-active grid was not recreated after double click: %v", err)
+	}
+	if clock.TimerCount() != 1 || clock.ActiveTimerCount() != 0 {
+		t.Fatalf("double-click timer state after completion = total %d active %d, want one stopped timer", clock.TimerCount(), clock.ActiveTimerCount())
+	}
+	motions := recordedMotionPositions(pointer.Events())
+	buttons := recordedButtonEvents(pointer.Events())
+	assertButtonClick(t, buttons, PointerButtonLeft, 2, motions[0])
+
+	clock.Advance(time.Second)
+	if got := len(recordedButtonEvents(pointer.Events())); got != 4 {
+		t.Fatalf("stale double-click timer emitted extra buttons: got %d want 4", got)
+	}
+
+	traceEvents := decodeTraceEvents(t, traceBytes.String())
+	assertOverlayUnmapBeforePointerButtons(t, traceEvents)
+	assertNoOverlayRenderBetweenPointerButtons(t, traceEvents)
+	assertStayActiveResetAfterClickComplete(t, traceEvents)
+}
+
+func TestLayerShellOverlayDriverShiftSpaceRightClickNoLeftTimerAndStayInactive(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, clock, traceBytes := newTestClickOverlayDriver(t, monitor, func(config *Config) {
+		config.Behavior.StayActive = false
+	})
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed, Modifiers: ModifierState{Shift: true}},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased, Modifiers: ModifierState{Shift: true}},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pointer.WaitForEventCount(waitCtx, 5); err != nil {
+		t.Fatalf("right click was not emitted: %v", err)
+	}
+	if clock.TimerCount() != 0 || clock.ActiveTimerCount() != 0 {
+		t.Fatalf("Shift-space created left-click timer: total %d active %d", clock.TimerCount(), clock.ActiveTimerCount())
+	}
+	if driver.OverlayActive() {
+		t.Fatal("driver stayed active with behavior.stay_active=false")
+	}
+	if got := wayland.keyboard.ShowCount(); got != 1 {
+		t.Fatalf("show count after stay_active=false click = %d, want 1", got)
+	}
+	motions := recordedMotionPositions(pointer.Events())
+	buttons := recordedButtonEvents(pointer.Events())
+	assertButtonClick(t, buttons, PointerButtonRight, 1, motions[0])
+
+	traceEvents := decodeTraceEvents(t, traceBytes.String())
+	assertOverlayUnmapBeforePointerButtons(t, traceEvents)
+	assertNoTraceEvent(t, traceEvents, traceStayActiveReset)
+}
+
+func TestLayerShellOverlayDriverEscapeCancelsPendingClickAndOverridesStayActive(t *testing.T) {
+	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
+	driver, wayland, _, pointer, clock, traceBytes := newTestClickOverlayDriver(t, monitor, func(config *Config) {
+		config.Behavior.StayActive = true
+		config.Behavior.DoubleClickTimeoutMS = 250
+	})
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "Escape", State: KeyPressed},
+	)
+	controller := newDaemonController(driver, statusOutput{})
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := wayland.keyboard.WaitForPendingEvents(waitCtx, 0); err != nil {
+		t.Fatalf("keyboard events were not consumed: %v", err)
+	}
+	if err := wayland.WaitForEventCount(waitCtx, 10); err != nil {
+		t.Fatalf("Escape did not tear down the overlay: %v", err)
+	}
+	if driver.OverlayActive() {
+		t.Fatal("driver stayed active after Escape")
+	}
+	if clock.TimerCount() != 1 || clock.ActiveTimerCount() != 0 {
+		t.Fatalf("pending click timer state after Escape = total %d active %d, want one stopped timer", clock.TimerCount(), clock.ActiveTimerCount())
+	}
+
+	clock.Advance(time.Second)
+	if got := len(recordedButtonEvents(pointer.Events())); got != 0 {
+		t.Fatalf("stale pending click emitted %d button events after Escape", got)
+	}
+	if got := wayland.keyboard.ShowCount(); got != 1 {
+		t.Fatalf("Escape recreated stay-active grid: show count = %d want 1", got)
+	}
+	traceEvents := decodeTraceEvents(t, traceBytes.String())
+	assertNoTraceEvent(t, traceEvents, tracePointerButton)
+	assertNoTraceEvent(t, traceEvents, traceStayActiveReset)
+}
+
 func TestLayerShellOverlayDriverEscapeDestroysSurfaceAndResetsController(t *testing.T) {
 	driver, wayland, _ := newTestLayerShellOverlayDriver(t, Monitor{
 		Name:          "DP-1",
@@ -617,6 +813,36 @@ func newTestNavigationOverlayDriver(t *testing.T, monitor Monitor) (*layerShellO
 	return driver, wayland, renderer, pointer, clock
 }
 
+func newTestClickOverlayDriver(t *testing.T, monitor Monitor, configure func(*Config)) (*layerShellOverlayDriver, *fakeWaylandBackend, *recordingCoordinateOverlayRenderer, *pointerRecorder, *fakeClock, *lockedTraceBuffer) {
+	t.Helper()
+	traceBytes := &lockedTraceBuffer{}
+	clock := newFakeClock(time.Unix(200, 0), nil)
+	trace := NewTraceRecorder(traceBytes, clock.Now)
+	clock.trace = trace
+	config := DefaultConfig()
+	config.Grid.Size = 26
+	config.Grid.SubgridPixelSize = 5
+	if configure != nil {
+		configure(&config)
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("test config Validate returned error: %v", err)
+	}
+	pointer := newPointerRecorder(trace)
+	pointer.now = clock.Now
+	wayland := newFakeWaylandBackend(trace)
+	wayland.keyboard.SetBlocking(true)
+	renderer := &recordingCoordinateOverlayRenderer{}
+	driver, err := newLayerShellOverlayDriverWithOptions(newFakeHyprlandIPC(monitor), wayland, renderer, config, trace, layerShellOverlayDriverOptions{
+		Pointer: pointer,
+		Clock:   clock,
+	})
+	if err != nil {
+		t.Fatalf("newLayerShellOverlayDriverWithOptions returned error: %v", err)
+	}
+	return driver, wayland, renderer, pointer, clock, traceBytes
+}
+
 func recordedMotionPositions(events []recordedPointerEvent) []PointerPosition {
 	var positions []PointerPosition
 	for _, event := range events {
@@ -625,6 +851,37 @@ func recordedMotionPositions(events []recordedPointerEvent) []PointerPosition {
 		}
 	}
 	return positions
+}
+
+func recordedButtonEvents(events []recordedPointerEvent) []PointerButtonEvent {
+	var buttons []PointerButtonEvent
+	for _, event := range events {
+		if event.Kind == "button" {
+			buttons = append(buttons, event.Button)
+		}
+	}
+	return buttons
+}
+
+func assertButtonClick(t *testing.T, buttons []PointerButtonEvent, button PointerButton, clickCount int, position PointerPosition) {
+	t.Helper()
+	if len(buttons) != clickCount*2 {
+		t.Fatalf("button event count = %d, want %d for %d click(s): %+v", len(buttons), clickCount*2, clickCount, buttons)
+	}
+	clickGroup := buttons[0].ClickGroup
+	for i, event := range buttons {
+		wantState := PointerButtonDown
+		if i%2 == 1 {
+			wantState = PointerButtonUp
+		}
+		wantSequence := i/2 + 1
+		if event.Button != button || event.State != wantState || event.ClickGroup != clickGroup || event.ClickCount != clickCount || event.Sequence != wantSequence {
+			t.Fatalf("button event[%d] = %+v, want %s %s group %d count %d sequence %d", i, event, button, wantState, clickGroup, clickCount, wantSequence)
+		}
+		if event.Position != position {
+			t.Fatalf("button event[%d] position = %+v, want committed position %+v", i, event.Position, position)
+		}
+	}
 }
 
 type lockedTraceBuffer struct {
@@ -691,4 +948,72 @@ func requireTraceEvent(t *testing.T, events []TraceEvent, want string) TraceEven
 	}
 	t.Fatalf("trace missing %q; saw %v", want, sortedKeys(seen))
 	return TraceEvent{}
+}
+
+func assertOverlayUnmapBeforePointerButtons(t *testing.T, events []TraceEvent) {
+	t.Helper()
+	unmapped := false
+	for _, event := range events {
+		if event.Event == traceOverlayUnmap {
+			unmapped = true
+		}
+		if event.Event == tracePointerButton && !unmapped {
+			t.Fatalf("pointer button trace occurred before overlay unmap: seq=%d fields=%+v", event.Seq, event.Fields)
+		}
+	}
+}
+
+func assertStayActiveResetAfterClickComplete(t *testing.T, events []TraceEvent) {
+	t.Helper()
+	completeSeq := uint64(0)
+	resetSeq := uint64(0)
+	for _, event := range events {
+		if event.Event == traceClickGroupComplete && completeSeq == 0 {
+			completeSeq = event.Seq
+		}
+		if event.Event == traceStayActiveReset && resetSeq == 0 {
+			resetSeq = event.Seq
+		}
+	}
+	if completeSeq == 0 || resetSeq == 0 {
+		t.Fatalf("missing click completion or stay-active reset trace: complete=%d reset=%d", completeSeq, resetSeq)
+	}
+	if resetSeq <= completeSeq {
+		t.Fatalf("stay-active reset seq=%d occurred before click completion seq=%d", resetSeq, completeSeq)
+	}
+}
+
+func assertNoOverlayRenderBetweenPointerButtons(t *testing.T, events []TraceEvent) {
+	t.Helper()
+	firstButtonSeq := uint64(0)
+	lastButtonSeq := uint64(0)
+	for _, event := range events {
+		if event.Event != tracePointerButton {
+			continue
+		}
+		if firstButtonSeq == 0 {
+			firstButtonSeq = event.Seq
+		}
+		lastButtonSeq = event.Seq
+	}
+	if firstButtonSeq == 0 || lastButtonSeq == 0 {
+		t.Fatal("no pointer button traces recorded")
+	}
+	for _, event := range events {
+		if event.Seq <= firstButtonSeq || event.Seq >= lastButtonSeq {
+			continue
+		}
+		if event.Event == traceOverlayRender || event.Event == traceOverlaySurfaceCreate || event.Event == traceOverlayKeyboardGrab {
+			t.Fatalf("overlay reopened during click sequence at seq=%d event=%s", event.Seq, event.Event)
+		}
+	}
+}
+
+func assertNoTraceEvent(t *testing.T, events []TraceEvent, unwanted string) {
+	t.Helper()
+	for _, event := range events {
+		if event.Event == unwanted {
+			t.Fatalf("unexpected trace event %q at seq=%d fields=%+v", unwanted, event.Seq, event.Fields)
+		}
+	}
 }

@@ -47,6 +47,7 @@ type overlaySession struct {
 	selected    selectedCell
 	navigator   hiddenSubcellNavigator
 	repeat      *heldDirectionRepeat
+	pendingLeft *pendingLeftClick
 }
 
 type heldDirectionRepeat struct {
@@ -54,6 +55,11 @@ type heldDirectionRepeat struct {
 	direction hiddenDirection
 	timer     TimerHandle
 	cancel    chan struct{}
+}
+
+type pendingLeftClick struct {
+	timer  TimerHandle
+	cancel chan struct{}
 }
 
 type layerShellOverlayDriverOptions struct {
@@ -366,19 +372,148 @@ func (d *layerShellOverlayDriver) renderSelectedCellBuffer(monitor Monitor, cell
 func (d *layerShellOverlayDriver) handleKeyboardToken(session *overlaySession, token KeyboardInputToken) error {
 	switch token.Kind {
 	case KeyboardTokenLetter:
+		if d.sessionHasPendingLeftClick(session) {
+			return nil
+		}
 		return d.handleCoordinateLetter(session, token.Letter)
 	case KeyboardTokenCommand:
 		switch token.Command {
 		case KeyboardCommandExit:
 			return d.finishSession(context.Background(), session, overlayCancelEscape, true)
 		case KeyboardCommandBackspace:
+			if d.sessionHasPendingLeftClick(session) {
+				return nil
+			}
 			return d.handleCoordinateBackspace(session)
+		case KeyboardCommandLeftClick:
+			return d.startPendingLeftClick(session)
+		case KeyboardCommandDoubleClick:
+			return d.commitClick(session, clickCommitDoubleLeft, nil, true)
+		case KeyboardCommandRightClick:
+			return d.commitClick(session, clickCommitRight, nil, false)
 		default:
 			return nil
 		}
 	default:
 		return nil
 	}
+}
+
+type clickCommitKind string
+
+const (
+	clickCommitLeft       clickCommitKind = "left"
+	clickCommitRight      clickCommitKind = "right"
+	clickCommitDoubleLeft clickCommitKind = "double_left"
+)
+
+func (d *layerShellOverlayDriver) startPendingLeftClick(session *overlaySession) error {
+	d.mu.Lock()
+	if d.session != session || !session.hasSelected {
+		d.mu.Unlock()
+		return nil
+	}
+	if session.pendingLeft != nil {
+		d.mu.Unlock()
+		return nil
+	}
+	d.stopHeldDirectionRepeatLocked(session)
+	pending := &pendingLeftClick{
+		cancel: make(chan struct{}),
+	}
+	timer := d.clock.NewTimer(d.config.DoubleClickTimeout())
+	pending.timer = timer
+	session.pendingLeft = pending
+	d.mu.Unlock()
+
+	go d.runPendingLeftClickTimer(session, pending, timer)
+	return nil
+}
+
+func (d *layerShellOverlayDriver) runPendingLeftClickTimer(session *overlaySession, pending *pendingLeftClick, timer TimerHandle) {
+	select {
+	case <-pending.cancel:
+		return
+	case <-timer.C():
+		if err := d.commitClick(session, clickCommitLeft, pending, true); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				d.recordOverlayError("click", err)
+			}
+		}
+	}
+}
+
+func (d *layerShellOverlayDriver) commitClick(session *overlaySession, kind clickCommitKind, pending *pendingLeftClick, requirePending bool) error {
+	if !d.claimSessionForClick(session, pending, requirePending) {
+		return nil
+	}
+
+	clickCtx := context.Background()
+	if err := destroyOverlaySession(clickCtx, session, true); err != nil {
+		return err
+	}
+
+	switch kind {
+	case clickCommitLeft:
+		if err := d.pointer.LeftClick(clickCtx); err != nil {
+			return err
+		}
+	case clickCommitRight:
+		if err := d.pointer.RightClick(clickCtx); err != nil {
+			return err
+		}
+	case clickCommitDoubleLeft:
+		if err := d.pointer.DoubleClick(clickCtx); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown click commit kind %q", kind)
+	}
+
+	if d.config.Behavior.StayActive {
+		d.trace.Record(traceStayActiveReset, map[string]any{
+			"phase":      "main_grid",
+			"session_id": session.id,
+			"monitor":    session.monitor.Name,
+			"click_kind": string(kind),
+		})
+		return d.ShowOverlay(clickCtx)
+	}
+	return nil
+}
+
+func (d *layerShellOverlayDriver) claimSessionForClick(session *overlaySession, pending *pendingLeftClick, requirePending bool) bool {
+	if session == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.session != session || !session.hasSelected {
+		return false
+	}
+	if requirePending {
+		if session.pendingLeft == nil {
+			return false
+		}
+		if pending != nil && session.pendingLeft != pending {
+			return false
+		}
+	}
+	d.stopHeldDirectionRepeatLocked(session)
+	d.stopPendingLeftClickLocked(session)
+	d.session = nil
+	session.cancel()
+	d.trace.Record(traceOverlayDestroy, map[string]any{
+		"session_id": session.id,
+		"reason":     string(overlayCancelClickCommit),
+	})
+	return true
+}
+
+func (d *layerShellOverlayDriver) sessionHasPendingLeftClick(session *overlaySession) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.session == session && session.pendingLeft != nil
 }
 
 func (d *layerShellOverlayDriver) handleCoordinateLetter(session *overlaySession, letter string) error {
@@ -477,6 +612,7 @@ func (d *layerShellOverlayDriver) handleKeyboardEvent(session *overlaySession, e
 		d.mu.Lock()
 		if d.session == session {
 			d.stopHeldDirectionRepeatLocked(session)
+			d.stopPendingLeftClickLocked(session)
 		}
 		d.mu.Unlock()
 		return false, nil
@@ -491,9 +627,13 @@ func (d *layerShellOverlayDriver) handleKeyboardEvent(session *overlaySession, e
 	}
 	d.mu.Lock()
 	selected := d.session == session && session.hasSelected
+	pendingClick := selected && session.pendingLeft != nil
 	d.mu.Unlock()
 	if !selected {
 		return false, nil
+	}
+	if pendingClick {
+		return true, nil
 	}
 
 	switch event.State {
@@ -603,6 +743,20 @@ func (d *layerShellOverlayDriver) stopHeldDirectionRepeatLocked(session *overlay
 	session.repeat = nil
 }
 
+func (d *layerShellOverlayDriver) stopPendingLeftClickLocked(session *overlaySession) {
+	if session == nil || session.pendingLeft == nil {
+		return
+	}
+	pending := session.pendingLeft
+	if pending.timer != nil {
+		pending.timer.Stop()
+	}
+	if pending.cancel != nil {
+		close(pending.cancel)
+	}
+	session.pendingLeft = nil
+}
+
 func cellSubcellTrace(cell Rect, subgridPixelSize int) map[string]any {
 	grid, err := NewHiddenSubcellGeometry(cell, subgridPixelSize)
 	if err != nil {
@@ -638,6 +792,7 @@ func (d *layerShellOverlayDriver) finishSession(ctx context.Context, session *ov
 		return nil
 	}
 	d.stopHeldDirectionRepeatLocked(session)
+	d.stopPendingLeftClickLocked(session)
 	d.session = nil
 	d.mu.Unlock()
 

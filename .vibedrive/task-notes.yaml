@@ -35,3 +35,6 @@ tasks:
     - id: hidden-subcell-navigation-repeat
       status: done
       notes: 'Review fixes applied: repeat timer resets before pointer wakeup to avoid fake-clock flake, clean cancel trace noise suppressed, task-notes entry added. PRD_additions.md remains absent; PRD.md drove behavior.'
+    - id: click-commit-actions
+      status: done
+      notes: Implemented click commit in overlay driver with fake-clock coverage for single-click timeout, double-click stale timer prevention, Shift-space right click, Escape cancellation, overlay unmap-before-button traces, and stay_active true/false. Target-app delivery remains a real Hyprland smoke requirement.

@@ -84,6 +84,7 @@ type fakeWaylandBackend struct {
 	nextID   int
 	keyboard *fakeKeyboardEventSource
 	surfaces map[int]*fakeOverlaySurface
+	wait     chan struct{}
 }
 
 func newFakeWaylandBackend(trace *TraceRecorder) *fakeWaylandBackend {
@@ -91,6 +92,7 @@ func newFakeWaylandBackend(trace *TraceRecorder) *fakeWaylandBackend {
 		trace:    trace,
 		keyboard: newFakeKeyboardEventSource(trace),
 		surfaces: make(map[int]*fakeOverlaySurface),
+		wait:     make(chan struct{}),
 	}
 }
 
@@ -107,6 +109,7 @@ func (f *fakeWaylandBackend) CreateSurface(ctx context.Context, monitor Monitor)
 	surface := &fakeOverlaySurface{backend: f, id: id, monitor: monitor, lifecycle: newFakeOverlayLifecycleEventSource()}
 	f.surfaces[id] = surface
 	f.events = append(f.events, fakeWaylandEvent{Kind: "surface_create", SurfaceID: id, Monitor: monitor, OutputName: monitor.Name})
+	f.wakeLocked()
 	f.mu.Unlock()
 	f.trace.Record(traceOverlaySurfaceCreate, map[string]any{"surface_id": id, "monitor": monitor})
 	return surface, nil
@@ -134,6 +137,7 @@ func (f *fakeWaylandBackend) record(event fakeWaylandEvent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, event)
+	f.wakeLocked()
 }
 
 func (f *fakeWaylandBackend) Events() []fakeWaylandEvent {
@@ -151,6 +155,32 @@ func (f *fakeWaylandBackend) LastSurface() *fakeOverlaySurface {
 		return nil
 	}
 	return f.surfaces[f.nextID]
+}
+
+func (f *fakeWaylandBackend) WaitForEventCount(ctx context.Context, count int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		f.mu.Lock()
+		if len(f.events) >= count {
+			f.mu.Unlock()
+			return nil
+		}
+		wait := f.wait
+		f.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
+func (f *fakeWaylandBackend) wakeLocked() {
+	close(f.wait)
+	f.wait = make(chan struct{})
 }
 
 type fakeOverlaySurface struct {
@@ -303,6 +333,7 @@ func (f *fakeKeyboardEventSource) BeginShow() {
 	if f.wait == nil {
 		f.wait = make(chan struct{})
 	}
+	f.wakeLocked()
 	f.mu.Unlock()
 }
 
@@ -310,6 +341,27 @@ func (f *fakeKeyboardEventSource) ShowCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.showCount
+}
+
+func (f *fakeKeyboardEventSource) WaitForShowCount(ctx context.Context, count int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		f.mu.Lock()
+		if f.showCount >= count {
+			f.mu.Unlock()
+			return nil
+		}
+		wait := f.wait
+		f.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
 }
 
 func (f *fakeKeyboardEventSource) Enqueue(events ...KeyboardEvent) {
@@ -730,6 +782,24 @@ func (c *fakeClock) Advance(d time.Duration) {
 		timer.ch <- now
 		c.trace.Record(traceTimerFire, map[string]any{"timer_id": timer.id, "at": now})
 	}
+}
+
+func (c *fakeClock) TimerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.timers)
+}
+
+func (c *fakeClock) ActiveTimerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var active int
+	for _, timer := range c.timers {
+		if timer.active {
+			active++
+		}
+	}
+	return active
 }
 
 type fakeTimer struct {

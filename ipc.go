@@ -56,6 +56,7 @@ const (
 	overlayCancelShowToggle      overlayCancelReason = "show_toggle"
 	overlayCancelHide            overlayCancelReason = "hide"
 	overlayCancelEscape          overlayCancelReason = "escape"
+	overlayCancelClickCommit     overlayCancelReason = "click_commit"
 	overlayCancelCompositor      overlayCancelReason = "compositor_close"
 	overlayCancelKeyboardDestroy overlayCancelReason = "keyboard_destroy"
 	overlayCancelDaemonShutdown  overlayCancelReason = "daemon_shutdown"

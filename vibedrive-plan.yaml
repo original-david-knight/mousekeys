@@ -521,7 +521,7 @@ tasks:
         target application. Use a context/lifecycle path that is not canceled by
         keyboard-session teardown. Recreate the grid only after the click
         sequence completes when stay_active is true.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - hidden-subcell-navigation-repeat
