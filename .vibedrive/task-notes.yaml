@@ -11,3 +11,6 @@ tasks:
     - id: ipc-socket-and-toggle
       status: done
       notes: Implemented NDJSON Unix-socket IPC at $XDG_RUNTIME_DIR/mousekeys.sock. Status includes active state, pid, build id, daemon binary/socket/runtime, service env hints, and client binary metadata. Tests cover temp runtime cleanup, live-daemon refusal, stale socket removal, and show/hide/toggle transitions through a stub overlay.
+    - id: hyprland-focused-monitor
+      status: done
+      notes: Implemented Hyprland j/monitors Unix-socket client with typed Monitor mapping, scale normalization, origin preservation, physical dimensions, transform-aware logical axes, and fake-socket success/failure tests. go build ./..., go test ./..., and go vet ./... pass; live raw focused fields matched hyprctl -j monitors.

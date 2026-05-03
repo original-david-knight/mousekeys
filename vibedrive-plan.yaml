@@ -189,7 +189,7 @@ tasks:
 
         Handle missing env vars, missing socket, malformed JSON, and no focused
         monitor with errors that include useful context.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton
