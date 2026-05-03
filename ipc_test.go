@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,17 @@ func TestIPCCommandsDriveOverlayStatusAndToggle(t *testing.T) {
 	}
 	if status.Executable == "" || status.Binary.Executable == "" || status.Service.UnitName != "mousekeys.service" || status.Client == nil || status.Client.Executable == "" {
 		t.Fatalf("status missing binary/service/client metadata: %+v", status)
+	}
+	if runtime.GOOS == "linux" {
+		if status.Binary.ProcessExecutable == "" || status.Binary.ProcessFile == nil || status.Binary.ProcessFile.SHA256 == "" || status.Binary.ProcessFile.Inode == 0 {
+			t.Fatalf("status missing daemon process executable identity: %+v", status.Binary)
+		}
+		if status.Binary.PathFile == nil || status.Binary.PathFile.SHA256 == "" {
+			t.Fatalf("status missing daemon executable path identity: %+v", status.Binary)
+		}
+		if status.Client.ProcessExecutable == "" || status.Client.ProcessFile == nil || status.Client.ProcessFile.SHA256 == "" {
+			t.Fatalf("status missing client process executable identity: %+v", status.Client)
+		}
 	}
 
 	stdout.Reset()

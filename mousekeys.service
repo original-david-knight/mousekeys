@@ -1,0 +1,16 @@
+# mousekeys.service is a systemd user unit.
+# Install it to ~/.config/systemd/user/mousekeys.service, not to /etc/systemd/system.
+
+[Unit]
+Description=Mouse Keys Hyprland daemon
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/env sh -c 'missing=""; [ -n "$$XDG_RUNTIME_DIR" ] || missing="$$missing XDG_RUNTIME_DIR"; [ -n "$$WAYLAND_DISPLAY" ] || missing="$$missing WAYLAND_DISPLAY"; [ -n "$$HYPRLAND_INSTANCE_SIGNATURE" ] || missing="$$missing HYPRLAND_INSTANCE_SIGNATURE"; if [ -n "$$missing" ]; then echo "mousekeys.service: missing required Hyprland session environment:$$missing; import it into the systemd --user manager" >&2; exit 1; fi'
+ExecStart=/usr/bin/env mousekeys daemon
+Restart=on-failure
+StandardError=journal
+SyslogIdentifier=mousekeys
+
+[Install]
+WantedBy=default.target

@@ -651,7 +651,7 @@ tasks:
         The real smoke harness depends on this task and must verify that the
         restarted user service is running the rebuilt installed binary rather
         than a stale daemon left over from a previous build.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

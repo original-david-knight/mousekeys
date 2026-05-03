@@ -44,3 +44,6 @@ tasks:
     - id: headless-prd-acceptance-suite
       status: done
       notes: 'Addressed peer review: acceptance waits on trace events under race scheduling, held-repeat release waits for timer stop before clock advance, and click ordering marker is overlay.unmapped_for_click. go build ./..., go test ./..., go test -race -run TestHeadlessPRDAcceptanceSuite -count=20, and go vet ./... pass.'
+    - id: systemd-user-unit
+      status: done
+      notes: Added mousekeys.service user unit, install lifecycle docs stub, status binary identity metadata for stale-service checks, and task notes. go build/test/vet and systemd-analyze --user verify passed without warnings.

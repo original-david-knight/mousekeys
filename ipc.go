@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +12,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -37,9 +41,21 @@ type ipcResponse struct {
 }
 
 type binaryMetadata struct {
-	Executable       string   `json:"executable,omitempty"`
-	Args             []string `json:"args,omitempty"`
-	WorkingDirectory string   `json:"working_directory,omitempty"`
+	Executable        string        `json:"executable,omitempty"`
+	Args              []string      `json:"args,omitempty"`
+	WorkingDirectory  string        `json:"working_directory,omitempty"`
+	ProcessExecutable string        `json:"process_executable,omitempty"`
+	ProcessFile       *fileMetadata `json:"process_file,omitempty"`
+	PathFile          *fileMetadata `json:"path_file,omitempty"`
+}
+
+type fileMetadata struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"mod_time"`
+	Device  uint64 `json:"device,omitempty"`
+	Inode   uint64 `json:"inode,omitempty"`
+	SHA256  string `json:"sha256,omitempty"`
 }
 
 type serviceMetadata struct {
@@ -477,11 +493,60 @@ func currentBinaryMetadata() binaryMetadata {
 	workingDirectory, _ := os.Getwd()
 	args := make([]string, len(os.Args))
 	copy(args, os.Args)
-	return binaryMetadata{
+	metadata := binaryMetadata{
 		Executable:       executablePath(),
 		Args:             args,
 		WorkingDirectory: workingDirectory,
 	}
+	if metadata.Executable != "" {
+		if file, err := inspectExecutableFile(metadata.Executable); err == nil {
+			metadata.PathFile = &file
+		}
+	}
+	if runtime.GOOS == "linux" {
+		const procSelfExe = "/proc/self/exe"
+		if target, err := os.Readlink(procSelfExe); err == nil {
+			metadata.ProcessExecutable = target
+		}
+		if file, err := inspectExecutableFile(procSelfExe); err == nil {
+			metadata.ProcessFile = &file
+		}
+	}
+	return metadata
+}
+
+func inspectExecutableFile(path string) (fileMetadata, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileMetadata{}, err
+	}
+	meta := fileMetadata{
+		Path:    path,
+		Size:    info.Size(),
+		ModTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		meta.Device = uint64(stat.Dev)
+		meta.Inode = uint64(stat.Ino)
+	}
+	if sum, err := fileSHA256(path); err == nil {
+		meta.SHA256 = sum
+	}
+	return meta, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func currentServiceMetadata(getenv getenvFunc) serviceMetadata {
