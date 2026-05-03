@@ -9,6 +9,13 @@ Build and install the binary somewhere on the user service `PATH`:
 go build -o ~/.local/bin/mousekeys .
 ```
 
+For smoke tests and non-standard install locations, the unit also honors an
+explicit `MOUSEKEYS_INSTALL_PATH` imported into the user manager:
+
+```sh
+systemctl --user set-environment MOUSEKEYS_INSTALL_PATH="$HOME/.local/bin/mousekeys"
+```
+
 Install and verify the user unit:
 
 ```sh

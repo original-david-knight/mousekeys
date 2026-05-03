@@ -50,3 +50,6 @@ tasks:
     - id: docs-hyprland-and-install
       status: done
       notes: README.md was missing and is now created. PRD.md and vibedrive-plan.yaml were left unchanged. README covers Lua/legacy Hyprland trigger and autostart, systemd lifecycle with environment import/UWSM requirement, exact config defaults, v1 non-goals, stale daemon/focus/keymap/click-delivery troubleshooting, and smoke checks; configured README grep checks pass.
+    - id: real-hyprland-smoke-harness
+      status: done
+      notes: Added executable real Hyprland smoke harness with service MOUSEKEYS_INSTALL_PATH support, docs, and tests. Live run built/restarted service and correctly failed at real overlay initialization, proving the harness gates live-session failures.

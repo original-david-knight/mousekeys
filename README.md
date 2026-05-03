@@ -13,6 +13,13 @@ Build and install the binary somewhere the systemd user service can find through
 go build -o ~/.local/bin/mousekeys .
 ```
 
+For non-standard install locations and the real-session smoke harness, the
+systemd unit also accepts an explicit binary path:
+
+```sh
+systemctl --user set-environment MOUSEKEYS_INSTALL_PATH="$HOME/.local/bin/mousekeys"
+```
+
 Install the packaged user unit:
 
 ```sh
@@ -159,18 +166,29 @@ go vet ./...
 Installed-service checks in a live Hyprland session:
 
 ```sh
-go build -o ~/.local/bin/mousekeys .
-systemctl --user import-environment XDG_RUNTIME_DIR WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE
-systemctl --user restart mousekeys.service
-mousekeys status
-hyprctl dispatch exec 'mousekeys show'
+scripts/smoke_real_hyprland.sh
 ```
 
-Then use the overlay manually: type a coordinate such as `M` then `K`, press
-`Space`, and confirm the pointer moves and the click reaches the focused app.
-Repeat after `mousekeys hide`, after another `mousekeys show`, and after a
-service restart. When Chrome or Chromium is part of your workflow, repeat the
-click-delivery check with that window focused.
+The smoke script prints machine-readable JSON with `status` set to `pass`,
+`fail`, or `skip`. A skip is only valid when no live Hyprland session is
+detectable. In a live session it builds and installs the binary, installs the
+checked-in user unit, restarts `mousekeys.service`, verifies `mousekeys status`
+against the rebuilt binary, opens the overlay through
+`hyprctl dispatch exec 'mousekeys show'`, injects `M K Space` with an available
+test input tool such as `wtype`, `ydotool`, or `dotool`, checks
+`hyprctl cursorpos`, checks trace ordering for overlay-unmap-before-click,
+repeats after hide/show/show and after service restart, and repeats with
+Chrome/Chromium focused when a matching window is present. The literal Hyprland
+dispatch check requires Hyprland's exec environment to find `mousekeys` on
+`PATH`.
+
+Optional smoke variables:
+
+```sh
+MOUSEKEYS_INSTALL_PATH="$HOME/.local/bin/mousekeys" scripts/smoke_real_hyprland.sh
+MOUSEKEYS_SMOKE_RESULT=/tmp/mousekeys-smoke.json scripts/smoke_real_hyprland.sh
+MOUSEKEYS_SMOKE_TRACE=/tmp/mousekeys-trace.jsonl scripts/smoke_real_hyprland.sh
+```
 
 ## Troubleshooting
 
