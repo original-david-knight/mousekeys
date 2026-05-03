@@ -32,6 +32,7 @@ const (
 	traceKeyboardKey          = "keyboard.key"
 	traceKeyboardModifiers    = "keyboard.modifiers"
 	traceKeyboardRepeat       = "keyboard.repeat"
+	traceKeyboardToken        = "keyboard.token"
 	tracePointerMotion        = "pointer.motion"
 	tracePointerButton        = "pointer.button"
 	tracePointerFrame         = "pointer.frame"

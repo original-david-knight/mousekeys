@@ -313,6 +313,12 @@ func (f *fakeKeyboardEventSource) Enqueue(events ...KeyboardEvent) {
 	f.events = append(f.events, events...)
 }
 
+func (f *fakeKeyboardEventSource) PendingEvents() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.events)
+}
+
 func (f *fakeKeyboardEventSource) NextKeyboardEvent(ctx context.Context) (KeyboardEvent, error) {
 	if err := ctx.Err(); err != nil {
 		return KeyboardEvent{}, err

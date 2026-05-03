@@ -117,11 +117,17 @@ func TestKeyboardFakeLifecycleKeymapRepeatAndReuse(t *testing.T) {
 		if err := state.Apply(event); err != nil {
 			t.Fatalf("Apply(%s) returned error: %v", event.Kind, err)
 		}
+		if event.Kind == KeyboardEventKey && event.State == KeyPressed {
+			state.StartHeldDirectionRepeat("right")
+		}
 		if event.Kind == KeyboardEventKey && event.Key == "space" && !event.Modifiers.Shift {
 			t.Fatalf("Shift-space chord lost modifiers: %+v", event)
 		}
 		if event.Kind == KeyboardEventLeave && !state.Modifiers.Empty() {
 			t.Fatalf("leave did not reset modifiers: %+v", state.Modifiers)
+		}
+		if event.Kind == KeyboardEventLeave && (len(state.Pressed) != 0 || state.HeldRepeatActive) {
+			t.Fatalf("leave did not clear pressed or held repeat bookkeeping: %+v", state)
 		}
 	}
 	if keyboard.ShowCount() != 2 {

@@ -120,6 +120,7 @@ func (m ModifierState) Empty() bool {
 type KeyboardEvent struct {
 	Kind        KeyboardEventKind `json:"kind"`
 	Key         string            `json:"key,omitempty"`
+	RawKey      uint32            `json:"raw_key,omitempty"`
 	State       KeyState          `json:"state,omitempty"`
 	Modifiers   ModifierState     `json:"modifiers,omitempty"`
 	Repeated    bool              `json:"repeated,omitempty"`

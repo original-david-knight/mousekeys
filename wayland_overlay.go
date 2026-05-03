@@ -20,12 +20,13 @@ const (
 )
 
 type realWaylandOverlayBackend struct {
-	base     *WaylandClientBase
-	driver   *realWaylandBaseDriver
-	trace    *TraceRecorder
-	wlMu     sync.Mutex
-	fatalMu  sync.Mutex
-	fatalErr error
+	base        *WaylandClientBase
+	driver      *realWaylandBaseDriver
+	trace       *TraceRecorder
+	wlMu        sync.Mutex
+	fatalMu     sync.Mutex
+	fatalErr    error
+	keyboardHub *realWaylandKeyboardEventHub
 }
 
 func newRealWaylandOverlayBackend(base *WaylandClientBase, trace *TraceRecorder) (*realWaylandOverlayBackend, error) {
@@ -41,6 +42,7 @@ func newRealWaylandOverlayBackend(base *WaylandClientBase, trace *TraceRecorder)
 		driver: driver,
 		trace:  trace,
 	}
+	backend.keyboardHub = newRealWaylandKeyboardEventHub(backend)
 	base.mu.RLock()
 	display := base.display
 	base.mu.RUnlock()
@@ -48,6 +50,10 @@ func newRealWaylandOverlayBackend(base *WaylandClientBase, trace *TraceRecorder)
 		display.SetErrorHandler(func(ev client.DisplayErrorEvent) {
 			backend.setFatal(fmt.Errorf("Wayland protocol fatal error on object %d: code=%d message=%q", proxyID(ev.ObjectId), ev.Code, ev.Message))
 		})
+	}
+	if err := backend.installKeyboardHandlers(context.Background()); err != nil {
+		backend.keyboardHub.Close()
+		return nil, err
 	}
 	return backend, nil
 }
@@ -137,6 +143,9 @@ func (b *realWaylandOverlayBackend) OutputChanged(ctx context.Context, monitor M
 
 func (b *realWaylandOverlayBackend) Close(ctx context.Context) error {
 	b.trace.Record(traceOverlayClose, nil)
+	if b.keyboardHub != nil {
+		b.keyboardHub.Close()
+	}
 	if b.base == nil {
 		return nil
 	}
@@ -166,13 +175,48 @@ func (b *realWaylandOverlayBackend) overlayObjects(monitor Monitor) (*client.Com
 	return b.base.compositor, b.base.layerShell, output, nil
 }
 
-func (b *realWaylandOverlayBackend) keyboard() (*client.Keyboard, error) {
+func (b *realWaylandOverlayBackend) installKeyboardHandlers(ctx context.Context) error {
 	b.base.mu.RLock()
-	defer b.base.mu.RUnlock()
-	if b.base.keyboard == nil {
-		return nil, fmt.Errorf("Wayland keyboard is not bound")
+	seat := b.base.seat
+	oldKeyboard := b.base.keyboard
+	b.base.mu.RUnlock()
+	if seat == nil {
+		return fmt.Errorf("Wayland seat is not bound")
 	}
-	return b.base.keyboard, nil
+
+	var keyboard *client.Keyboard
+	err := b.withWayland(ctx, func() error {
+		var err error
+		keyboard, err = seat.GetKeyboard()
+		if err != nil {
+			return fmt.Errorf("create persistent wl_keyboard: %w", err)
+		}
+		b.keyboardHub.Attach(keyboard)
+		b.base.mu.Lock()
+		b.base.keyboard = keyboard
+		b.base.keyboardBound = true
+		b.base.mu.Unlock()
+		if oldKeyboard != nil {
+			if err := oldKeyboard.Release(); err != nil {
+				b.recordOverlayKeyboardReleaseError(err)
+			}
+		}
+		return nil
+	})
+	if err != nil && keyboard != nil {
+		_ = keyboard.Release()
+	}
+	return err
+}
+
+func (b *realWaylandOverlayBackend) recordOverlayKeyboardReleaseError(err error) {
+	if err == nil {
+		return
+	}
+	b.trace.Record(traceOverlayError, map[string]any{
+		"source": "keyboard_release",
+		"error":  err.Error(),
+	})
 }
 
 func (b *realWaylandOverlayBackend) shm() (*client.Shm, error) {
@@ -265,7 +309,7 @@ type realLayerShellSurface struct {
 	height      int
 	scale       float64
 	buffers     []*realWaylandSHMBuffer
-	keyboardSrc *realWaylandKeyboardEventSource
+	keyboardSrc KeyboardEventSource
 }
 
 func (s *realLayerShellSurface) Configure(ctx context.Context, width, height int, scale float64) error {
@@ -348,41 +392,10 @@ func (s *realLayerShellSurface) Render(ctx context.Context, buffer ARGBSnapshot)
 }
 
 func (s *realLayerShellSurface) GrabKeyboard(ctx context.Context) (KeyboardEventSource, error) {
-	keyboard, err := s.backend.keyboard()
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	source := newRealWaylandKeyboardEventSource(s.backend)
-	keyboard.SetKeymapHandler(func(ev client.KeyboardKeymapEvent) {
-		source.handleKeymap(ev)
-	})
-	keyboard.SetEnterHandler(func(client.KeyboardEnterEvent) {
-		source.enqueue(KeyboardEvent{Kind: KeyboardEventEnter})
-	})
-	keyboard.SetLeaveHandler(func(client.KeyboardLeaveEvent) {
-		source.enqueue(KeyboardEvent{Kind: KeyboardEventLeave})
-	})
-	keyboard.SetKeyHandler(func(ev client.KeyboardKeyEvent) {
-		source.enqueue(KeyboardEvent{
-			Kind:  KeyboardEventKey,
-			Key:   waylandKeyName(ev.Key),
-			State: waylandKeyState(ev.State),
-			At:    time.Now(),
-		})
-	})
-	keyboard.SetModifiersHandler(func(ev client.KeyboardModifiersEvent) {
-		source.enqueue(KeyboardEvent{
-			Kind:      KeyboardEventModifiers,
-			Modifiers: waylandModifiers(ev),
-		})
-	})
-	keyboard.SetRepeatInfoHandler(func(ev client.KeyboardRepeatInfoEvent) {
-		source.enqueue(KeyboardEvent{
-			Kind:        KeyboardEventRepeat,
-			RepeatRate:  int(ev.Rate),
-			RepeatDelay: time.Duration(ev.Delay) * time.Millisecond,
-		})
-	})
+	source := s.backend.keyboardHub.Subscribe()
 	s.mu.Lock()
 	s.keyboardSrc = source
 	s.mu.Unlock()
@@ -517,7 +530,9 @@ func (s *realLayerShellSurface) handleClosed() {
 	s.backend.trace.Record(traceOverlayClose, nil)
 	s.lifecycle.enqueue(OverlayLifecycleEvent{Kind: OverlayLifecycleCompositorClose})
 	if keyboardSrc != nil {
-		keyboardSrc.enqueue(KeyboardEvent{Kind: KeyboardEventDestroy})
+		if subscription, ok := keyboardSrc.(*realWaylandKeyboardSubscription); ok {
+			subscription.enqueue(KeyboardEvent{Kind: KeyboardEventDestroy})
+		}
 	}
 }
 
@@ -591,73 +606,177 @@ func (s *realOverlayLifecycleEventSource) enqueue(event OverlayLifecycleEvent) {
 	s.queue.push(event)
 }
 
-type realWaylandKeyboardEventSource struct {
+type realWaylandKeyboardEventHub struct {
 	backend *realWaylandOverlayBackend
-	queue   *overlayEventQueue[KeyboardEvent]
+	queueMu sync.Mutex
+
+	xkb         *xkbKeyboardState
+	lastKeymap  *KeyboardKeymapFD
+	subscribers map[*realWaylandKeyboardSubscription]struct{}
+	closed      bool
 }
 
-func newRealWaylandKeyboardEventSource(backend *realWaylandOverlayBackend) *realWaylandKeyboardEventSource {
-	return &realWaylandKeyboardEventSource{
-		backend: backend,
-		queue:   newOverlayEventQueue[KeyboardEvent](),
-	}
+type realWaylandKeyboardSubscription struct {
+	hub   *realWaylandKeyboardEventHub
+	queue *overlayEventQueue[KeyboardEvent]
 }
 
-func (s *realWaylandKeyboardEventSource) NextKeyboardEvent(ctx context.Context) (KeyboardEvent, error) {
-	if s == nil {
-		return KeyboardEvent{}, io.ErrClosedPipe
+func newRealWaylandKeyboardEventHub(backend *realWaylandOverlayBackend) *realWaylandKeyboardEventHub {
+	xkb, err := newXKBKeyboardState()
+	hub := &realWaylandKeyboardEventHub{
+		backend:     backend,
+		xkb:         xkb,
+		subscribers: make(map[*realWaylandKeyboardSubscription]struct{}),
 	}
-	return s.queue.pop(ctx, s.backend.dispatchOnce)
-}
-
-func (s *realWaylandKeyboardEventSource) Close() error {
-	if s == nil {
-		return nil
-	}
-	return s.queue.close()
-}
-
-func (s *realWaylandKeyboardEventSource) enqueue(event KeyboardEvent) {
-	if s == nil {
-		return
-	}
-	switch event.Kind {
-	case KeyboardEventKeymap:
-		size := int64(0)
-		if event.Keymap != nil {
-			size = event.Keymap.Size
-		}
-		s.backend.trace.Record(traceKeyboardKeymap, map[string]any{"size": size})
-	case KeyboardEventEnter:
-		s.backend.trace.Record(traceKeyboardEnter, nil)
-	case KeyboardEventLeave:
-		s.backend.trace.Record(traceKeyboardLeave, nil)
-	case KeyboardEventDestroy:
-		s.backend.trace.Record(traceKeyboardDestroy, nil)
-	case KeyboardEventKey:
-		s.backend.trace.Record(traceKeyboardKey, map[string]any{"key": event.Key, "state": event.State})
-	case KeyboardEventModifiers:
-		s.backend.trace.Record(traceKeyboardModifiers, map[string]any{"modifiers": event.Modifiers})
-	case KeyboardEventRepeat:
-		s.backend.trace.Record(traceKeyboardRepeat, map[string]any{"repeat_rate": event.RepeatRate, "repeat_delay": event.RepeatDelay.String()})
-	}
-	s.queue.push(event)
-}
-
-func (s *realWaylandKeyboardEventSource) handleKeymap(ev client.KeyboardKeymapEvent) {
-	if ev.Fd < 0 {
-		s.queue.fatal(fmt.Errorf("Wayland keymap event did not include a file descriptor"))
-		return
-	}
-	file := io.NewSectionReader(newFDReader(ev.Fd), 0, int64(ev.Size))
-	data := make([]byte, int(ev.Size))
-	_, err := io.ReadFull(file, data)
-	_ = unix.Close(ev.Fd)
 	if err != nil {
-		s.queue.fatal(fmt.Errorf("read Wayland keymap fd: %w", err))
+		hub.fatal(fmt.Errorf("initialize xkb keyboard state: %w", err))
+	}
+	return hub
+}
+
+func (h *realWaylandKeyboardEventHub) Attach(keyboard *client.Keyboard) {
+	if h == nil || keyboard == nil {
 		return
 	}
-	s.enqueue(KeyboardEvent{
+	keyboard.SetKeymapHandler(func(ev client.KeyboardKeymapEvent) {
+		h.handleKeymap(ev)
+	})
+	keyboard.SetEnterHandler(func(client.KeyboardEnterEvent) {
+		h.enqueue(KeyboardEvent{Kind: KeyboardEventEnter})
+	})
+	keyboard.SetLeaveHandler(func(client.KeyboardLeaveEvent) {
+		h.enqueue(KeyboardEvent{Kind: KeyboardEventLeave})
+	})
+	keyboard.SetKeyHandler(func(ev client.KeyboardKeyEvent) {
+		key := waylandKeyName(ev.Key)
+		if name, ok := h.keyName(ev.Key); ok {
+			key = name
+		}
+		h.enqueue(KeyboardEvent{
+			Kind:      KeyboardEventKey,
+			Key:       key,
+			RawKey:    ev.Key,
+			State:     waylandKeyState(ev.State),
+			Modifiers: h.modifiers(),
+			At:        time.Now(),
+		})
+	})
+	keyboard.SetModifiersHandler(func(ev client.KeyboardModifiersEvent) {
+		h.enqueue(KeyboardEvent{
+			Kind:      KeyboardEventModifiers,
+			Modifiers: h.updateModifiers(ev),
+		})
+	})
+	keyboard.SetRepeatInfoHandler(func(ev client.KeyboardRepeatInfoEvent) {
+		h.enqueue(KeyboardEvent{
+			Kind:        KeyboardEventRepeat,
+			RepeatRate:  int(ev.Rate),
+			RepeatDelay: time.Duration(ev.Delay) * time.Millisecond,
+		})
+	})
+}
+
+func (h *realWaylandKeyboardEventHub) Subscribe() *realWaylandKeyboardSubscription {
+	subscription := &realWaylandKeyboardSubscription{
+		hub:   h,
+		queue: newOverlayEventQueue[KeyboardEvent](),
+	}
+	h.queueMu.Lock()
+	if h.closed {
+		h.queueMu.Unlock()
+		subscription.queue.close()
+		return subscription
+	}
+	h.subscribers[subscription] = struct{}{}
+	lastKeymap := h.lastKeymap
+	h.queueMu.Unlock()
+
+	if lastKeymap != nil {
+		subscription.enqueue(KeyboardEvent{Kind: KeyboardEventKeymap, Keymap: lastKeymap})
+	}
+	return subscription
+}
+
+func (h *realWaylandKeyboardEventHub) Close() {
+	if h == nil {
+		return
+	}
+	h.queueMu.Lock()
+	if h.closed {
+		h.queueMu.Unlock()
+		return
+	}
+	h.closed = true
+	for subscription := range h.subscribers {
+		subscription.queue.close()
+	}
+	h.subscribers = nil
+	xkb := h.xkb
+	h.xkb = nil
+	h.queueMu.Unlock()
+	if xkb != nil {
+		xkb.Close()
+	}
+}
+
+func (h *realWaylandKeyboardEventHub) enqueue(event KeyboardEvent) {
+	if h == nil {
+		return
+	}
+	h.record(event)
+	h.queueMu.Lock()
+	if h.closed {
+		h.queueMu.Unlock()
+		return
+	}
+	if event.Kind == KeyboardEventKeymap && event.Keymap != nil {
+		h.lastKeymap = event.Keymap
+	}
+	for subscription := range h.subscribers {
+		subscription.queue.push(event)
+	}
+	h.queueMu.Unlock()
+}
+
+func (h *realWaylandKeyboardEventHub) fatal(err error) {
+	if h == nil || err == nil {
+		return
+	}
+	h.backend.setFatal(err)
+	h.queueMu.Lock()
+	for subscription := range h.subscribers {
+		subscription.queue.fatal(err)
+	}
+	h.queueMu.Unlock()
+}
+
+func (h *realWaylandKeyboardEventHub) handleKeymap(ev client.KeyboardKeymapEvent) {
+	if ev.Fd < 0 {
+		h.fatal(fmt.Errorf("Wayland keymap event did not include a file descriptor"))
+		return
+	}
+	defer unix.Close(ev.Fd)
+	if ev.Format != uint32(client.KeyboardKeymapFormatXkbV1) {
+		h.fatal(fmt.Errorf("unsupported Wayland keymap format %d", ev.Format))
+		return
+	}
+	data, err := readWaylandKeymapFD(ev.Fd, int64(ev.Size))
+	if err != nil {
+		h.fatal(fmt.Errorf("read Wayland keymap fd: %w", err))
+		return
+	}
+	h.queueMu.Lock()
+	xkb := h.xkb
+	h.queueMu.Unlock()
+	if xkb == nil {
+		h.fatal(fmt.Errorf("xkb keyboard state is not initialized"))
+		return
+	}
+	if err := xkb.SetKeymap(data); err != nil {
+		h.fatal(fmt.Errorf("load Wayland xkb keymap: %w", err))
+		return
+	}
+	h.enqueue(KeyboardEvent{
 		Kind: KeyboardEventKeymap,
 		Keymap: &KeyboardKeymapFD{
 			Data: data,
@@ -666,21 +785,190 @@ func (s *realWaylandKeyboardEventSource) handleKeymap(ev client.KeyboardKeymapEv
 	})
 }
 
-type fdReader int
-
-func newFDReader(fd int) fdReader {
-	return fdReader(fd)
+func (h *realWaylandKeyboardEventHub) updateModifiers(ev client.KeyboardModifiersEvent) ModifierState {
+	h.queueMu.Lock()
+	xkb := h.xkb
+	h.queueMu.Unlock()
+	if xkb == nil {
+		return waylandModifiers(ev)
+	}
+	return xkb.UpdateMask(ev.ModsDepressed, ev.ModsLatched, ev.ModsLocked, ev.Group)
 }
 
-func (r fdReader) ReadAt(p []byte, off int64) (int, error) {
-	n, err := unix.Pread(int(r), p, off)
-	if err != nil {
-		return n, err
+func (h *realWaylandKeyboardEventHub) modifiers() ModifierState {
+	h.queueMu.Lock()
+	xkb := h.xkb
+	h.queueMu.Unlock()
+	if xkb == nil {
+		return ModifierState{}
 	}
-	if n == 0 && len(p) > 0 {
-		return n, io.EOF
+	return xkb.Modifiers()
+}
+
+func (h *realWaylandKeyboardEventHub) keyName(key uint32) (string, bool) {
+	h.queueMu.Lock()
+	xkb := h.xkb
+	h.queueMu.Unlock()
+	if xkb == nil {
+		return "", false
 	}
-	return n, nil
+	return xkb.KeyName(key)
+}
+
+func (h *realWaylandKeyboardEventHub) record(event KeyboardEvent) {
+	switch event.Kind {
+	case KeyboardEventKeymap:
+		size := int64(0)
+		if event.Keymap != nil {
+			size = event.Keymap.Size
+		}
+		h.backend.trace.Record(traceKeyboardKeymap, map[string]any{"size": size})
+	case KeyboardEventEnter:
+		h.backend.trace.Record(traceKeyboardEnter, nil)
+	case KeyboardEventLeave:
+		h.backend.trace.Record(traceKeyboardLeave, nil)
+	case KeyboardEventDestroy:
+		h.backend.trace.Record(traceKeyboardDestroy, nil)
+	case KeyboardEventKey:
+		h.backend.trace.Record(traceKeyboardKey, map[string]any{"key": event.Key, "raw_key": event.RawKey, "state": event.State, "modifiers": event.Modifiers})
+	case KeyboardEventModifiers:
+		h.backend.trace.Record(traceKeyboardModifiers, map[string]any{"modifiers": event.Modifiers})
+	case KeyboardEventRepeat:
+		h.backend.trace.Record(traceKeyboardRepeat, map[string]any{"repeat_rate": event.RepeatRate, "repeat_delay": event.RepeatDelay.String()})
+	}
+}
+
+func (s *realWaylandKeyboardSubscription) NextKeyboardEvent(ctx context.Context) (KeyboardEvent, error) {
+	if s == nil || s.hub == nil {
+		return KeyboardEvent{}, io.ErrClosedPipe
+	}
+	return s.queue.pop(ctx, s.hub.backend.dispatchOnce)
+}
+
+func (s *realWaylandKeyboardSubscription) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.hub != nil {
+		s.hub.queueMu.Lock()
+		if s.hub.subscribers != nil {
+			delete(s.hub.subscribers, s)
+		}
+		s.hub.queueMu.Unlock()
+	}
+	return s.queue.close()
+}
+
+func (s *realWaylandKeyboardSubscription) enqueue(event KeyboardEvent) {
+	if s == nil {
+		return
+	}
+	s.queue.push(event)
+}
+
+func readWaylandKeymapFD(fd int, size int64) ([]byte, error) {
+	if fd < 0 {
+		return nil, fmt.Errorf("invalid keymap fd %d", fd)
+	}
+	if size < 0 {
+		return nil, fmt.Errorf("keymap size %d is negative", size)
+	}
+	dup, err := unix.Dup(fd)
+	if err == nil {
+		defer unix.Close(dup)
+		if _, seekErr := unix.Seek(dup, 0, io.SeekStart); seekErr == nil {
+			return readFDFromCurrentOffset(dup, size)
+		}
+	}
+	return preadFDFromStart(fd, size)
+}
+
+func readFDFromCurrentOffset(fd int, size int64) ([]byte, error) {
+	if size == 0 {
+		var out []byte
+		buf := make([]byte, 4096)
+		for {
+			n, err := unix.Read(fd, buf)
+			if n > 0 {
+				out = append(out, buf[:n]...)
+			}
+			if err != nil {
+				if err == unix.EINTR {
+					continue
+				}
+				return nil, err
+			}
+			if n == 0 {
+				return out, nil
+			}
+		}
+	}
+	if size > int64(int(size)) {
+		return nil, fmt.Errorf("keymap size %d overflows int", size)
+	}
+	out := make([]byte, int(size))
+	read := 0
+	for read < len(out) {
+		n, err := unix.Read(fd, out[read:])
+		if n > 0 {
+			read += n
+		}
+		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			return nil, err
+		}
+		if n == 0 {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+	return out, nil
+}
+
+func preadFDFromStart(fd int, size int64) ([]byte, error) {
+	if size == 0 {
+		var out []byte
+		buf := make([]byte, 4096)
+		var offset int64
+		for {
+			n, err := unix.Pread(fd, buf, offset)
+			if n > 0 {
+				out = append(out, buf[:n]...)
+				offset += int64(n)
+			}
+			if err != nil {
+				if err == unix.EINTR {
+					continue
+				}
+				return nil, err
+			}
+			if n == 0 {
+				return out, nil
+			}
+		}
+	}
+	if size > int64(int(size)) {
+		return nil, fmt.Errorf("keymap size %d overflows int", size)
+	}
+	out := make([]byte, int(size))
+	read := 0
+	for read < len(out) {
+		n, err := unix.Pread(fd, out[read:], int64(read))
+		if n > 0 {
+			read += n
+		}
+		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			return nil, err
+		}
+		if n == 0 {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+	return out, nil
 }
 
 type realWaylandSHMBuffer struct {

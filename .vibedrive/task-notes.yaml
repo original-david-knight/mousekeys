@@ -23,3 +23,6 @@ tasks:
     - id: wlr-layer-shell-overlay
       status: done
       notes: Implemented lazy production layer-shell overlay with focused-output top layer, exclusive keyboard, shm buffers, lifecycle queues, nil-safe cleanup, active-state resync after async close, and fake-backed lifecycle tests. Verified go test/vet/build and race tests; live Hyprland smoke remains for later acceptance.
+    - id: wayland-keyboard-input
+      status: done
+      notes: 'Peer review fixes applied: fake keymap Offset semantics restored while production fd reads remain offset-independent, sleep-based reuse test made deterministic, and modifier-rejection plus keyboard hub lifecycle tests added. go build ./..., go test ./..., go vet ./..., and CGO_ENABLED=0 go test ./... pass; live Hyprland smoke remains.'

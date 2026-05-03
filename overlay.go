@@ -131,7 +131,12 @@ func (d *layerShellOverlayDriver) CloseOverlay(ctx context.Context) error {
 }
 
 func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
-	var keyboardState KeyboardSessionState
+	translator, err := NewKeyboardInputTranslator(d.config)
+	if err != nil {
+		d.recordOverlayError("keyboard", err)
+		_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
+		return
+	}
 	for {
 		event, err := session.keyboard.NextKeyboardEvent(session.ctx)
 		if err != nil {
@@ -141,7 +146,8 @@ func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
 			}
 			return
 		}
-		if err := keyboardState.Apply(event); err != nil {
+		token, ok, err := translator.Apply(event)
+		if err != nil {
 			d.recordOverlayError("keyboard", err)
 			_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
 			return
@@ -150,7 +156,15 @@ func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
 			_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
 			return
 		}
-		if len(d.config.Parsed.Exit) == 1 && d.config.Parsed.Exit[0].MatchesEvent(event) {
+		if ok {
+			d.trace.Record(traceKeyboardToken, map[string]any{
+				"kind":    token.Kind,
+				"letter":  token.Letter,
+				"command": token.Command,
+				"chord":   token.Chord.String(),
+			})
+		}
+		if ok && token.Kind == KeyboardTokenCommand && token.Command == KeyboardCommandExit {
 			_ = d.finishSession(context.Background(), session, overlayCancelEscape, true)
 			return
 		}

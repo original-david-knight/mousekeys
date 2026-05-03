@@ -351,7 +351,7 @@ tasks:
         - Shift-space is a right-click chord, not a two-token sequence
         - compositor repeat must not create repeated command actions; only the
           app-controlled hidden-subcell repeat task moves while held
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base
