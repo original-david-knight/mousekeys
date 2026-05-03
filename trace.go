@@ -34,6 +34,7 @@ const (
 	traceKeyboardModifiers       = "keyboard.modifiers"
 	traceKeyboardRepeat          = "keyboard.repeat"
 	traceKeyboardToken           = "keyboard.token"
+	traceKeyboardIgnored         = "keyboard.ignored"
 	traceCoordinateInput         = "coordinate.input"
 	traceCoordinateSelected      = "coordinate.selected_cell"
 	tracePointerMotion           = "pointer.motion"

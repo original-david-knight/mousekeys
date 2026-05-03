@@ -56,3 +56,6 @@ tasks:
     - id: basic-flow-checkpoint
       status: done
       notes: go build ./..., go vet ./..., go test ./..., and uncached go test -count=1 ./... passed. Targeted headless M K Space flow asserts 3-5 key presses, selected monitor/center trace fields, left-click trace button count/fields, unmap-before-click, and stay-active reset. Built .vibedrive/tmp/mousekeys-basic-flow-checkpoint and verified --help; real Hyprland smoke remains a later gate.
+    - id: acceptance-checkpoint
+      status: in_progress
+      notes: PRD acceptance checkpoint complete. go build ./..., go vet ./..., go test ./..., uncached go test -count=1 ./..., and live Hyprland installed-service smoke all passed. Live smoke used wtype for overlay keys and /dev/uinput for configured SUPER+period; Chrome was available and passed. No unavailable real-session prerequisite remains. Verification failed while running "if test -x scripts/smoke_real_hyprland.sh; then scripts/smoke_real_hyprland.sh --require-if-session; elif test -x .vibedrive/smoke_real_hyprland.sh; then .vibedrive/smoke_real_hyprland.sh --require-if-session; else echo \"real Hyprland smoke harness missing\" >&2; exit 1; fi".

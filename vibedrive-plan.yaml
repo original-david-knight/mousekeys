@@ -826,7 +826,7 @@ tasks:
         not describe it as a real-session pass. If a session exists and the smoke
         fails or cannot inject keys due to missing prerequisites, mark the
         checkpoint blocked or failed rather than accepting headless-only results.
-      status: todo
+      status: in_progress
       workflow: checkpoint
       deps:
         - basic-flow-checkpoint

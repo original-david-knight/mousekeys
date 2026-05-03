@@ -73,7 +73,9 @@ func (t *KeyboardInputTranslator) Apply(event KeyboardEvent) (KeyboardInputToken
 		return KeyboardInputToken{}, false, err
 	}
 	switch event.Kind {
-	case KeyboardEventKeymap, KeyboardEventLeave, KeyboardEventDestroy:
+	case KeyboardEventKeymap:
+		return KeyboardInputToken{}, false, nil
+	case KeyboardEventLeave, KeyboardEventDestroy:
 		t.resetSequences()
 		return KeyboardInputToken{}, false, nil
 	case KeyboardEventKey:

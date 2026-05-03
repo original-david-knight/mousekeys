@@ -287,11 +287,6 @@ type waylandGlobalBinding struct {
 	Version   uint32
 }
 
-type waylandSeatBindingNeeds struct {
-	Keyboard bool
-	Pointer  bool
-}
-
 func (c *WaylandClientBase) handleRegistryGlobal(name uint32, iface string, version uint32) waylandGlobalBinding {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -433,17 +428,13 @@ func (c *WaylandClientBase) noteSeatName(name string) {
 	c.seatName = name
 }
 
-func (c *WaylandClientBase) handleSeatCapabilities(capabilities uint32) waylandSeatBindingNeeds {
+func (c *WaylandClientBase) handleSeatCapabilities(capabilities uint32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.seatCapabilities = capabilities
 	c.keyboardCapable = capabilities&uint32(client.SeatCapabilityKeyboard) != 0
 	c.pointerCapable = capabilities&uint32(client.SeatCapabilityPointer) != 0
-	return waylandSeatBindingNeeds{
-		Keyboard: c.keyboardCapable && !c.keyboardBound,
-		Pointer:  c.pointerCapable && !c.pointerBound,
-	}
 }
 
 func (c *WaylandClientBase) noteOutput(global uint32, output *client.Output, err error) {
@@ -599,14 +590,14 @@ func (c *WaylandClientBase) validateRequired() error {
 		return fmt.Errorf("missing required Wayland global(s): %s", strings.Join(missing, ", "))
 	}
 	var seatMissing []string
-	if !c.keyboardCapable || !c.keyboardBound {
+	if !c.keyboardCapable {
 		seatMissing = append(seatMissing, "keyboard")
 	}
-	if !c.pointerCapable || !c.pointerBound {
+	if !c.pointerCapable {
 		seatMissing = append(seatMissing, "pointer")
 	}
 	if len(seatMissing) > 0 {
-		return fmt.Errorf("Wayland seat %q did not advertise or bind required capability/capabilities: %s", c.seatName, strings.Join(seatMissing, ", "))
+		return fmt.Errorf("Wayland seat %q did not advertise required capability/capabilities: %s", c.seatName, strings.Join(seatMissing, ", "))
 	}
 	return nil
 }
@@ -777,11 +768,11 @@ func (d *realWaylandBaseDriver) bindGlobal(binding waylandGlobalBinding, c *Wayl
 	switch binding.Kind {
 	case waylandBindingCompositor:
 		compositor := client.NewCompositor(ctx)
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, compositor)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, compositor)
 		c.noteCompositor(compositor, err)
 	case waylandBindingShm:
 		shm := client.NewShm(ctx)
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, shm)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, shm)
 		c.noteShm(shm, err)
 	case waylandBindingSeat:
 		seat := client.NewSeat(ctx)
@@ -789,17 +780,9 @@ func (d *realWaylandBaseDriver) bindGlobal(binding waylandGlobalBinding, c *Wayl
 			c.noteSeatName(ev.Name)
 		})
 		seat.SetCapabilitiesHandler(func(ev client.SeatCapabilitiesEvent) {
-			needs := c.handleSeatCapabilities(ev.Capabilities)
-			if needs.Keyboard {
-				keyboard, err := seat.GetKeyboard()
-				c.noteKeyboard(keyboard, err)
-			}
-			if needs.Pointer {
-				pointer, err := seat.GetPointer()
-				c.notePointer(pointer, err)
-			}
+			c.handleSeatCapabilities(ev.Capabilities)
 		})
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, seat)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, seat)
 		c.noteSeat(seat, err)
 	case waylandBindingOutput:
 		output := client.NewOutput(ctx)
@@ -819,20 +802,20 @@ func (d *realWaylandBaseDriver) bindGlobal(binding waylandGlobalBinding, c *Wayl
 		output.SetDescriptionHandler(func(ev client.OutputDescriptionEvent) {
 			c.handleOutputDescription(global, ev)
 		})
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, output)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, output)
 		d.outputs[global] = output
 		c.noteOutput(global, output, err)
 	case waylandBindingLayerShell:
 		layerShell := wlr.NewLayerShell(ctx)
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, layerShell)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, layerShell)
 		c.noteLayerShell(layerShell, err)
 	case waylandBindingVirtualPointerManager:
 		manager := wlr.NewVirtualPointerManager(ctx)
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, manager)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, manager)
 		c.noteVirtualPointerManager(manager, err)
 	case waylandBindingXDGOutputManager:
 		manager := xdgoutput.NewOutputManager(ctx)
-		err := d.registry.Bind(binding.Name, binding.Interface, binding.Version, manager)
+		err := bindWaylandRegistryGlobal(d.registry, binding.Name, binding.Interface, binding.Version, manager)
 		d.xdgOutputManager = manager
 		if err != nil {
 			c.recordBindError(binding.Interface, err)

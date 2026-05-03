@@ -106,6 +106,27 @@ func TestKeyboardInputTranslatorShiftSpaceDoesNotAdvanceDoubleClick(t *testing.T
 	}
 }
 
+func TestKeyboardInputTranslatorKeymapDoesNotCancelDoubleClickSequence(t *testing.T) {
+	translator := newTestKeyboardInputTranslator(t)
+
+	first, ok, err := translator.Apply(KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed})
+	if err != nil || !ok || first.Command != KeyboardCommandLeftClick {
+		t.Fatalf("first space token = %+v, %v, %v; want left click", first, ok, err)
+	}
+	_, _, err = translator.Apply(KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased})
+	if err != nil {
+		t.Fatalf("space release returned error: %v", err)
+	}
+	_, ok, err = translator.Apply(KeyboardEvent{Kind: KeyboardEventKeymap, Keymap: &KeyboardKeymapFD{Data: []byte("keymap"), Size: 6}})
+	if err != nil || ok {
+		t.Fatalf("keymap Apply = ok %v err %v, want no token and no error", ok, err)
+	}
+	second, ok, err := translator.Apply(KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed})
+	if err != nil || !ok || second.Command != KeyboardCommandDoubleClick {
+		t.Fatalf("second space token after keymap = %+v, %v, %v; want double click", second, ok, err)
+	}
+}
+
 func TestKeyboardInputTranslatorRejectsCtrlAltSuperChords(t *testing.T) {
 	for _, event := range []KeyboardEvent{
 		{Kind: KeyboardEventKey, Key: "space", State: KeyPressed, Modifiers: ModifierState{Ctrl: true}},

@@ -77,6 +77,39 @@ func TestWaylandSocketPathFromEnv(t *testing.T) {
 	})
 }
 
+func TestWaylandStringEncodingUsesUnpaddedWireLength(t *testing.T) {
+	for _, value := range []string{"wl_compositor", layerShellOverlayNamespace} {
+		t.Run(value, func(t *testing.T) {
+			buf := make([]byte, 4+waylandStringPayloadLen(value))
+			n, err := putWaylandString(buf, value)
+			if err != nil {
+				t.Fatalf("putWaylandString returned error: %v", err)
+			}
+			if n != len(buf) {
+				t.Fatalf("putWaylandString wrote %d bytes, want %d", n, len(buf))
+			}
+			if got, want := client.Uint32(buf[:4]), uint32(len(value)+1); got != want {
+				t.Fatalf("Wayland string wire length = %d, want unpadded length %d", got, want)
+			}
+			for i, b := range []byte(value) {
+				if got := buf[4+i]; got != b {
+					t.Fatalf("payload byte %d = %q, want %q", i, got, b)
+				}
+			}
+			for i := 4 + len(value); i < len(buf); i++ {
+				if buf[i] != 0 {
+					t.Fatalf("padding byte %d = %d, want zero", i, buf[i])
+				}
+			}
+		})
+	}
+
+	buf := make([]byte, 4+waylandStringPayloadLen("bad\x00name"))
+	if _, err := putWaylandString(buf, "bad\x00name"); err == nil {
+		t.Fatal("putWaylandString accepted an embedded NUL")
+	}
+}
+
 func TestWaylandClientBaseBindsRequiredGlobalsAndMatchesOutput(t *testing.T) {
 	_, env, _ := waylandSocketEnvForTest(t, "wayland-bind")
 	driver := newFakeWaylandBaseDriver()
@@ -375,13 +408,7 @@ func (f *fakeWaylandBaseDriver) Open(ctx context.Context, socketPath string, c *
 			c.handleOutputDescription(output.global, client.OutputDescriptionEvent{Description: output.description})
 		}
 	}
-	needs := c.handleSeatCapabilities(f.seatCapabilities)
-	if needs.Keyboard {
-		c.noteKeyboard(nil, nil)
-	}
-	if needs.Pointer {
-		c.notePointer(nil, nil)
-	}
+	c.handleSeatCapabilities(f.seatCapabilities)
 	for _, global := range c.pendingXDGOutputBindings() {
 		f.mu.Lock()
 		f.xdgRequests = append(f.xdgRequests, global)

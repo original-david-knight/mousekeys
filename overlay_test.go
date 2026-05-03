@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -451,6 +452,24 @@ func TestLayerShellOverlayDriverIgnoresCompositorRepeatForDirectionKeys(t *testi
 	}
 }
 
+func TestOverlayEventQueuePopCanceledContextDoesNotPump(t *testing.T) {
+	queue := newOverlayEventQueue[KeyboardEvent]()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pumped := false
+	_, err := queue.pop(ctx, func(context.Context) error {
+		pumped = true
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pop returned %v, want context.Canceled", err)
+	}
+	if pumped {
+		t.Fatal("pop called pump after context was canceled")
+	}
+}
+
 func TestLayerShellOverlayDriverSpaceTimeoutLeftClickAndStayActive(t *testing.T) {
 	monitor := Monitor{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1}
 	driver, wayland, _, pointer, clock, traceBytes := newTestClickOverlayDriver(t, monitor, func(config *Config) {
@@ -464,6 +483,7 @@ func TestLayerShellOverlayDriverSpaceTimeoutLeftClickAndStayActive(t *testing.T)
 		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased},
 		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyPressed},
 		KeyboardEvent{Kind: KeyboardEventKey, Key: "space", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKeymap, Keymap: &KeyboardKeymapFD{Data: []byte("updated-keymap"), Size: 14}},
 	)
 	controller := newDaemonController(driver, statusOutput{})
 

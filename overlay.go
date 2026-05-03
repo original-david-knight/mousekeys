@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -223,6 +225,18 @@ func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
 				"letter":  token.Letter,
 				"command": token.Command,
 				"chord":   token.Chord.String(),
+			})
+		} else if event.Kind == KeyboardEventKey && event.State == KeyPressed {
+			d.mu.Lock()
+			selected := d.session == session && session.hasSelected
+			pendingLeft := selected && session.pendingLeft != nil
+			d.mu.Unlock()
+			d.trace.Record(traceKeyboardIgnored, map[string]any{
+				"key":          event.Key,
+				"modifiers":    event.Modifiers,
+				"repeated":     event.Repeated,
+				"selected":     selected,
+				"pending_left": pendingLeft,
 			})
 		}
 		if ok {
@@ -450,7 +464,9 @@ func (d *layerShellOverlayDriver) commitClick(session *overlaySession, kind clic
 
 	clickCtx := context.Background()
 	if err := destroyOverlaySession(clickCtx, session, true); err != nil {
-		return err
+		if resetErr := d.resetWaylandAfterClosedNetwork(clickCtx, err); resetErr != nil {
+			return resetErr
+		}
 	}
 	d.trace.Record(traceOverlayUnmappedForClick, map[string]any{
 		"session_id": session.id,
@@ -613,7 +629,14 @@ func (d *layerShellOverlayDriver) handleCoordinateBackspace(session *overlaySess
 
 func (d *layerShellOverlayDriver) handleKeyboardEvent(session *overlaySession, event KeyboardEvent) (bool, error) {
 	switch event.Kind {
-	case KeyboardEventKeymap, KeyboardEventLeave:
+	case KeyboardEventKeymap:
+		d.mu.Lock()
+		if d.session == session {
+			d.stopHeldDirectionRepeatLocked(session)
+		}
+		d.mu.Unlock()
+		return false, nil
+	case KeyboardEventLeave:
 		d.mu.Lock()
 		if d.session == session {
 			d.stopHeldDirectionRepeatLocked(session)
@@ -806,7 +829,10 @@ func (d *layerShellOverlayDriver) finishSession(ctx context.Context, session *ov
 		"session_id": session.id,
 		"reason":     string(reason),
 	})
-	return destroyOverlaySession(ctx, session, unmap)
+	if err := destroyOverlaySession(ctx, session, unmap); err != nil {
+		return d.resetWaylandAfterClosedNetwork(ctx, err)
+	}
+	return nil
 }
 
 func destroyOverlaySession(ctx context.Context, session *overlaySession, unmap bool) error {
@@ -844,6 +870,23 @@ func (d *layerShellOverlayDriver) recordOverlayError(source string, err error) {
 		"source": source,
 		"error":  err.Error(),
 	})
+}
+
+func (d *layerShellOverlayDriver) resetWaylandAfterClosedNetwork(ctx context.Context, err error) error {
+	if !isClosedNetworkConnectionError(err) {
+		return err
+	}
+	if closeErr := d.wayland.Close(ctx); closeErr != nil && !isClosedNetworkConnectionError(closeErr) {
+		return errors.Join(err, closeErr)
+	}
+	return nil
+}
+
+func isClosedNetworkConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection")
 }
 
 type noopPointerActionSynthesizer struct{}
@@ -927,6 +970,9 @@ func (q *overlayEventQueue[T]) pop(ctx context.Context, pump func(context.Contex
 		ctx = context.Background()
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		q.mu.Lock()
 		if len(q.events) > 0 {
 			event := q.events[0]

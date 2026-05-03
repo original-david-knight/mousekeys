@@ -500,40 +500,104 @@ PY
 wait_and_assert_flow_trace() {
 	local start_line="$1"
 	local check_name="$2"
+	local cursor="$3"
 	local last="flow trace not complete"
 	for _ in $(seq 1 80); do
-		local cursor
-		if cursor="$(hyprctl cursorpos 2>&1)"; then
-			local summary
-			if summary="$(assert_flow_trace "$start_line" "$cursor" 2>&1)"; then
-				add_check "$check_name" "pass" "$summary"
-				return 0
-			fi
-			last="$summary"
-		else
-			last="hyprctl cursorpos failed: $cursor"
+		local summary
+		if summary="$(assert_flow_trace "$start_line" "$cursor" 2>&1)"; then
+			add_check "$check_name" "pass" "$summary"
+			return 0
 		fi
+		last="$summary"
 		sleep 0.1
 	done
 	fail_check "$check_name" "$last"
 }
 
-inject_mk_space() {
+capture_selected_cursor() {
+	local start_line="$1"
+	local last="coordinate selection not complete"
+	for _ in $(seq 1 80); do
+		local cursor
+		if cursor="$(hyprctl cursorpos 2>&1)"; then
+			if assert_flow_selection "$start_line" "$cursor" >/dev/null 2>&1; then
+				printf '%s\n' "$cursor"
+				return 0
+			fi
+			last="$(assert_flow_selection "$start_line" "$cursor" 2>&1 || true)"
+		else
+			last="hyprctl cursorpos failed: $cursor"
+		fi
+		sleep 0.1
+	done
+	printf '%s\n' "$last"
+	return 1
+}
+
+assert_flow_selection() {
+	local start_line="$1"
+	local cursorpos="$2"
+	"$python_bin" - "$trace_path" "$start_line" "$cursorpos" <<'PY'
+import json
+import math
+import re
+import sys
+
+path = sys.argv[1]
+start = int(sys.argv[2])
+cursorpos = sys.argv[3]
+events = []
+try:
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i < start or not line.strip():
+                continue
+            events.append(json.loads(line))
+except FileNotFoundError:
+    events = []
+seen = {e.get("event") for e in events}
+required = {"keyboard.token", "coordinate.selected_cell", "pointer.motion"}
+missing = sorted(required - seen)
+if missing:
+    print("missing selection trace events: " + ",".join(missing))
+    raise SystemExit(1)
+tokens = [e.get("fields") or {} for e in events if e.get("event") == "keyboard.token"]
+letters = [t.get("letter") for t in tokens if t.get("kind") == "letter"]
+if letters[:2] != ["M", "K"]:
+    print(f"keyboard token letters={letters!r}, want ['M', 'K']")
+    raise SystemExit(1)
+selected = [e for e in events if e.get("event") == "coordinate.selected_cell"][-1]
+fields = selected.get("fields") or {}
+if fields.get("coordinate") != "MK" or fields.get("column") != 12 or fields.get("row") != 10:
+    print(f"selected cell fields={fields!r}, want coordinate MK column=12 row=10")
+    raise SystemExit(1)
+cx = float(fields.get("center_virtual_x"))
+cy = float(fields.get("center_virtual_y"))
+numbers = re.findall(r"-?\d+(?:\.\d+)?", cursorpos)
+if len(numbers) < 2:
+    print(f"could not parse hyprctl cursorpos output {cursorpos!r}")
+    raise SystemExit(1)
+px, py = map(float, numbers[:2])
+distance = math.hypot(px - cx, py - cy)
+if distance > 3.0:
+    print(f"cursorpos=({px:g},{py:g}) is {distance:.2f}px from selected center ({cx:g},{cy:g})")
+    raise SystemExit(1)
+print(f"coordinate=MK cursorpos=({px:g},{py:g}) selected_center=({cx:g},{cy:g}) distance={distance:.2f}px")
+PY
+}
+
+inject_mk() {
 	case "$input_tool" in
 		wtype)
 			wtype m >/dev/null 2>&1 || return 1
 			sleep 0.05
 			wtype k >/dev/null 2>&1 || return 1
-			sleep 0.05
-			wtype -k space >/dev/null 2>&1 || return 1
 			;;
 		ydotool)
 			ydotool type -d 20 mk >/dev/null 2>&1 || return 1
-			sleep 0.05
-			ydotool key 57:1 57:0 >/dev/null 2>&1 || return 1
 			;;
 		dotool)
-			printf 'type mk\nkey space\n' | dotool >/dev/null 2>&1 || return 1
+			printf 'type mk\n' | dotool >/dev/null 2>&1 || return 1
 			;;
 		*)
 			return 1
@@ -541,7 +605,90 @@ inject_mk_space() {
 	esac
 }
 
+inject_space() {
+	case "$input_tool" in
+		wtype)
+			wtype -k space >/dev/null 2>&1 || return 1
+			;;
+		ydotool)
+			ydotool key 57:1 57:0 >/dev/null 2>&1 || return 1
+			;;
+		dotool)
+			printf 'key space\n' | dotool >/dev/null 2>&1 || return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+inject_super_period_uinput() {
+	[ -w /dev/uinput ] || return 1
+	"$python_bin" <<'PY'
+import fcntl
+import os
+import struct
+import time
+
+EV_SYN = 0
+EV_KEY = 1
+SYN_REPORT = 0
+KEY_DOT = 52
+KEY_LEFTMETA = 125
+BUS_USB = 3
+UI_SET_EVBIT = 0x40045564
+UI_SET_KEYBIT = 0x40045565
+UI_DEV_CREATE = 0x5501
+UI_DEV_DESTROY = 0x5502
+
+keyboard_keys = (
+    1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    30, 31, 32, 33, 34, 35, 36, 37, 38,
+    44, 45, 46, 47, 48, 49, 50, 52, 57, KEY_LEFTMETA,
+)
+
+fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+try:
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    for key in keyboard_keys:
+        fcntl.ioctl(fd, UI_SET_KEYBIT, key)
+    name = b"mousekeys-smoke-keyboard"
+    user_dev = struct.pack("80sHHHHI", name, BUS_USB, 0x1209, 0x6D6B, 1, 0)
+    user_dev += struct.pack("i" * 256, *([0] * 256))
+    os.write(fd, user_dev)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    time.sleep(1.0)
+
+    def emit(event_type, code, value):
+        os.write(fd, struct.pack("llHHi", 0, 0, event_type, code, value))
+
+    def sync():
+        emit(EV_SYN, SYN_REPORT, 0)
+
+    emit(EV_KEY, KEY_LEFTMETA, 1)
+    sync()
+    time.sleep(0.08)
+    emit(EV_KEY, KEY_DOT, 1)
+    sync()
+    time.sleep(0.08)
+    emit(EV_KEY, KEY_DOT, 0)
+    sync()
+    time.sleep(0.08)
+    emit(EV_KEY, KEY_LEFTMETA, 0)
+    sync()
+    time.sleep(0.25)
+finally:
+    try:
+        fcntl.ioctl(fd, UI_DEV_DESTROY)
+    finally:
+        os.close(fd)
+PY
+}
+
 inject_super_period() {
+	if inject_super_period_uinput; then
+		return 0
+	fi
 	case "$input_tool" in
 		wtype)
 			wtype -M logo -k period -m logo >/dev/null 2>&1
@@ -590,10 +737,17 @@ run_flow() {
 	if ! focus_wait="$(wait_trace_events "$start_line" 80 overlay.keyboard_grab keyboard.keymap keyboard.enter 2>&1)"; then
 		fail_check "$check_name" "overlay did not receive keyboard focus/keymap after $trigger trigger: $focus_wait"
 	fi
-	if ! inject_mk_space; then
-		fail_check "$check_name" "failed to inject M K Space with $input_tool"
+	if ! inject_mk; then
+		fail_check "$check_name" "failed to inject M K with $input_tool"
 	fi
-	wait_and_assert_flow_trace "$start_line" "$check_name"
+	local selected_cursor
+	if ! selected_cursor="$(capture_selected_cursor "$start_line")"; then
+		fail_check "$check_name" "$selected_cursor"
+	fi
+	if ! inject_space; then
+		fail_check "$check_name" "failed to inject Space with $input_tool"
+	fi
+	wait_and_assert_flow_trace "$start_line" "$check_name" "$selected_cursor"
 	hide_overlay
 	if ! wait_status_active false; then
 		fail_check "${check_name}_cleanup" "overlay stayed active after cleanup hide"
@@ -664,6 +818,9 @@ run_keybind_flow_if_possible() {
 	case "$detection" in
 		possible:*)
 			add_check "configured_keybind_detected" "pass" "${detection#possible:}"
+			if [ -w /dev/uinput ]; then
+				add_check "configured_keybind_injector" "pass" "using temporary /dev/uinput keyboard for SUPER+period"
+			fi
 			run_flow "configured_keybind_flow" "keybind"
 			;;
 		skip:*)

@@ -79,7 +79,7 @@ func (b *realWaylandOverlayBackend) CreateSurface(ctx context.Context, monitor M
 		if err != nil {
 			return fmt.Errorf("create wl_surface: %w", err)
 		}
-		layerSurface, err := layerShell.GetLayerSurface(wlSurface, output, uint32(wlr.LayerShellLayerTop), layerShellOverlayNamespace)
+		layerSurface, err := getWLRLayerSurface(layerShell, wlSurface, output, uint32(wlr.LayerShellLayerTop), layerShellOverlayNamespace)
 		if err != nil {
 			return fmt.Errorf("create wlr layer surface: %w", err)
 		}
@@ -240,6 +240,9 @@ func (b *realWaylandOverlayBackend) withWayland(ctx context.Context, fn func() e
 	}
 	b.wlMu.Lock()
 	defer b.wlMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := b.fatal(); err != nil {
 		return err
 	}
@@ -261,6 +264,9 @@ func (b *realWaylandOverlayBackend) dispatchOnce(ctx context.Context) error {
 	}
 	b.wlMu.Lock()
 	defer b.wlMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := b.fatal(); err != nil {
 		return err
 	}
@@ -317,6 +323,10 @@ func (s *realLayerShellSurface) Configure(ctx context.Context, width, height int
 		return err
 	}
 	s.mu.Lock()
+	if s.destroyed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
 	if s.width > 0 {
 		width = s.width
 	}
@@ -547,7 +557,9 @@ func (s *realLayerShellSurface) handleBufferRelease(buffer *realWaylandSHMBuffer
 	if buffer == nil {
 		return
 	}
-	buffer.markReleased()
+	if !buffer.markReleased() {
+		return
+	}
 	s.backend.trace.Record(traceOverlayRelease, map[string]any{
 		"width":  buffer.width,
 		"height": buffer.height,
@@ -556,21 +568,6 @@ func (s *realLayerShellSurface) handleBufferRelease(buffer *realWaylandSHMBuffer
 }
 
 func (s *realLayerShellSurface) cleanupReleasedBuffers(ctx context.Context) {
-	s.mu.Lock()
-	var keep []*realWaylandSHMBuffer
-	var released []*realWaylandSHMBuffer
-	for _, buffer := range s.buffers {
-		if buffer.released() {
-			released = append(released, buffer)
-			continue
-		}
-		keep = append(keep, buffer)
-	}
-	s.buffers = keep
-	s.mu.Unlock()
-	for _, buffer := range released {
-		_ = buffer.destroy(ctx)
-	}
 }
 
 type realOverlayLifecycleEventSource struct {
@@ -589,7 +586,7 @@ func (s *realOverlayLifecycleEventSource) NextOverlayEvent(ctx context.Context) 
 	if s == nil {
 		return OverlayLifecycleEvent{}, io.ErrClosedPipe
 	}
-	return s.queue.pop(ctx, s.backend.dispatchOnce)
+	return s.queue.pop(ctx, nil)
 }
 
 func (s *realOverlayLifecycleEventSource) Close() error {
@@ -1045,10 +1042,14 @@ func (b *realWaylandOverlayBackend) newSHMBuffer(ctx context.Context, snapshot A
 	return shmBuffer, nil
 }
 
-func (b *realWaylandSHMBuffer) markReleased() {
+func (b *realWaylandSHMBuffer) markReleased() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.releasedFlag {
+		return false
+	}
 	b.releasedFlag = true
+	return true
 }
 
 func (b *realWaylandSHMBuffer) released() bool {
