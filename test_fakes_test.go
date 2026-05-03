@@ -75,6 +75,7 @@ type fakeWaylandEvent struct {
 	Scale      float64
 	BufferHash string
 	OutputName string
+	Snapshot   ARGBSnapshot
 }
 
 type fakeWaylandBackend struct {
@@ -197,12 +198,13 @@ func (s *fakeOverlaySurface) Configure(ctx context.Context, width, height int, s
 		return err
 	}
 	s.backend.record(fakeWaylandEvent{
-		Kind:      "configure",
-		SurfaceID: s.id,
-		Monitor:   s.monitor,
-		Width:     width,
-		Height:    height,
-		Scale:     scale,
+		Kind:       "configure",
+		SurfaceID:  s.id,
+		Monitor:    s.monitor,
+		Width:      width,
+		Height:     height,
+		Scale:      scale,
+		OutputName: s.monitor.Name,
 	})
 	s.backend.trace.Record(traceOverlayConfigure, map[string]any{
 		"surface_id": s.id,
@@ -225,6 +227,8 @@ func (s *fakeOverlaySurface) Render(ctx context.Context, buffer ARGBSnapshot) er
 		Width:      buffer.Width,
 		Height:     buffer.Height,
 		BufferHash: hash,
+		OutputName: s.monitor.Name,
+		Snapshot:   buffer,
 	})
 	s.backend.trace.Record(traceOverlayRender, map[string]any{
 		"surface_id": s.id,
@@ -240,7 +244,7 @@ func (s *fakeOverlaySurface) GrabKeyboard(ctx context.Context) (KeyboardEventSou
 		return nil, err
 	}
 	s.backend.keyboard.BeginShow()
-	s.backend.record(fakeWaylandEvent{Kind: "keyboard_grab", SurfaceID: s.id, Monitor: s.monitor})
+	s.backend.record(fakeWaylandEvent{Kind: "keyboard_grab", SurfaceID: s.id, Monitor: s.monitor, OutputName: s.monitor.Name})
 	s.backend.trace.Record(traceOverlayKeyboardGrab, map[string]any{
 		"surface_id": s.id,
 		"show_count": s.backend.keyboard.ShowCount(),
@@ -258,7 +262,7 @@ func (s *fakeOverlaySurface) Unmap(ctx context.Context) error {
 		return nil
 	}
 	s.mu.Unlock()
-	s.backend.record(fakeWaylandEvent{Kind: "unmap", SurfaceID: s.id, Monitor: s.monitor})
+	s.backend.record(fakeWaylandEvent{Kind: "unmap", SurfaceID: s.id, Monitor: s.monitor, OutputName: s.monitor.Name})
 	s.backend.trace.Record(traceOverlayUnmap, map[string]any{"surface_id": s.id})
 	return nil
 }
@@ -277,7 +281,7 @@ func (s *fakeOverlaySurface) Destroy(ctx context.Context) error {
 	if s.lifecycle != nil {
 		_ = s.lifecycle.Close()
 	}
-	s.backend.record(fakeWaylandEvent{Kind: "destroy", SurfaceID: s.id, Monitor: s.monitor})
+	s.backend.record(fakeWaylandEvent{Kind: "destroy", SurfaceID: s.id, Monitor: s.monitor, OutputName: s.monitor.Name})
 	s.backend.trace.Record(traceOverlayDestroy, map[string]any{"surface_id": s.id})
 	return nil
 }

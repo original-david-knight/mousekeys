@@ -452,6 +452,11 @@ func (d *layerShellOverlayDriver) commitClick(session *overlaySession, kind clic
 	if err := destroyOverlaySession(clickCtx, session, true); err != nil {
 		return err
 	}
+	d.trace.Record(traceOverlayUnmappedForClick, map[string]any{
+		"session_id": session.id,
+		"click_kind": string(kind),
+		"monitor":    session.monitor.Name,
+	})
 
 	switch kind {
 	case clickCommitLeft:

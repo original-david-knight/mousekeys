@@ -616,7 +616,7 @@ tasks:
         Failure output must include structured trace data for overlay lifecycle,
         keyboard lifecycle, cursor targets, button events, timers, output names,
         and renderer hashes.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - multi-output-scaling-and-alpha-regression

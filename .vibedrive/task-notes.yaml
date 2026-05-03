@@ -41,3 +41,6 @@ tasks:
     - id: multi-output-scaling-and-alpha-regression
       status: done
       notes: Peer review required adding the central task-notes entry; added it. Regressions cover scaled/non-zero/negative focused-monitor geometry, with-output local vs fallback layout pointer paths, scaled logical renderer alignment, Wayland scaling/premult alpha, light/dark label composites, and PRD multi-monitor out-of-scope coverage. go build/test/vet ./... pass.
+    - id: headless-prd-acceptance-suite
+      status: done
+      notes: 'Addressed peer review: acceptance waits on trace events under race scheduling, held-repeat release waits for timer stop before clock advance, and click ordering marker is overlay.unmapped_for_click. go build ./..., go test ./..., go test -race -run TestHeadlessPRDAcceptanceSuite -count=20, and go vet ./... pass.'
