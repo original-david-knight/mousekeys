@@ -390,7 +390,7 @@ tasks:
 
         No ydotool/uinput dependency is allowed for product input synthesis.
         External input tools may only appear in real smoke tests.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - wayland-client-base

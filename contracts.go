@@ -206,6 +206,13 @@ type PointerSynthesizer interface {
 	Frame(ctx context.Context, frame PointerFrame) error
 }
 
+type PointerActionSynthesizer interface {
+	MoveAbsolute(ctx context.Context, x, y float64, output Monitor) error
+	LeftClick(ctx context.Context) error
+	RightClick(ctx context.Context) error
+	DoubleClick(ctx context.Context) error
+}
+
 type InstalledServiceStatus struct {
 	UnitName   string            `json:"unit_name"`
 	Active     bool              `json:"active"`

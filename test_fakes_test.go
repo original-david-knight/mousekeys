@@ -382,13 +382,17 @@ type recordedPointerEvent struct {
 }
 
 type pointerRecorder struct {
-	mu     sync.Mutex
-	trace  *TraceRecorder
-	events []recordedPointerEvent
+	mu           sync.Mutex
+	trace        *TraceRecorder
+	events       []recordedPointerEvent
+	now          func() time.Time
+	lastPosition PointerPosition
+	hasPosition  bool
+	clickGroup   int
 }
 
 func newPointerRecorder(trace *TraceRecorder) *pointerRecorder {
-	return &pointerRecorder{trace: trace}
+	return &pointerRecorder{trace: trace, now: time.Now}
 }
 
 func (p *pointerRecorder) MovePointer(ctx context.Context, motion PointerMotion) error {
@@ -397,6 +401,8 @@ func (p *pointerRecorder) MovePointer(ctx context.Context, motion PointerMotion)
 	}
 	p.mu.Lock()
 	p.events = append(p.events, recordedPointerEvent{Kind: "motion", Motion: motion, OrderIndex: len(p.events)})
+	p.lastPosition = motion.Position
+	p.hasPosition = true
 	p.mu.Unlock()
 	p.trace.Record(tracePointerMotion, map[string]any{"position": motion.Position, "at": motion.At})
 	return nil
@@ -430,6 +436,89 @@ func (p *pointerRecorder) Frame(ctx context.Context, frame PointerFrame) error {
 	p.mu.Unlock()
 	p.trace.Record(tracePointerFrame, map[string]any{"output_name": frame.OutputName, "at": frame.At})
 	return nil
+}
+
+func (p *pointerRecorder) MoveAbsolute(ctx context.Context, x, y float64, output Monitor) error {
+	if err := output.Validate(); err != nil {
+		return err
+	}
+	at := p.clockNow()
+	position := PointerPosition{X: x, Y: y, OutputName: output.Name}
+	if err := p.MovePointer(ctx, PointerMotion{Position: position, At: at}); err != nil {
+		return err
+	}
+	return p.Frame(ctx, PointerFrame{OutputName: output.Name, At: at})
+}
+
+func (p *pointerRecorder) LeftClick(ctx context.Context) error {
+	return p.click(ctx, PointerButtonLeft, 1)
+}
+
+func (p *pointerRecorder) RightClick(ctx context.Context) error {
+	return p.click(ctx, PointerButtonRight, 1)
+}
+
+func (p *pointerRecorder) DoubleClick(ctx context.Context) error {
+	return p.click(ctx, PointerButtonLeft, 2)
+}
+
+func (p *pointerRecorder) click(ctx context.Context, button PointerButton, count int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if count <= 0 {
+		return fmt.Errorf("click count must be positive, got %d", count)
+	}
+	p.mu.Lock()
+	if !p.hasPosition {
+		p.mu.Unlock()
+		return fmt.Errorf("pointer recorder click requires a prior MoveAbsolute target")
+	}
+	p.clickGroup++
+	clickGroup := p.clickGroup
+	position := p.lastPosition
+	p.mu.Unlock()
+
+	p.trace.Record(traceClickGroupStart, map[string]any{"click_group": clickGroup, "click_count": count, "position": position})
+	for sequence := 1; sequence <= count; sequence++ {
+		if err := p.Button(ctx, PointerButtonEvent{
+			Button:     button,
+			State:      PointerButtonDown,
+			Position:   position,
+			ClickGroup: clickGroup,
+			ClickCount: count,
+			Sequence:   sequence,
+			At:         p.clockNow(),
+		}); err != nil {
+			return err
+		}
+		if err := p.Button(ctx, PointerButtonEvent{
+			Button:     button,
+			State:      PointerButtonUp,
+			Position:   position,
+			ClickGroup: clickGroup,
+			ClickCount: count,
+			Sequence:   sequence,
+			At:         p.clockNow(),
+		}); err != nil {
+			return err
+		}
+		if err := p.Frame(ctx, PointerFrame{OutputName: position.OutputName, At: p.clockNow()}); err != nil {
+			return err
+		}
+	}
+	p.trace.Record(traceClickGroupComplete, map[string]any{"click_group": clickGroup, "click_count": count})
+	return nil
+}
+
+func (p *pointerRecorder) clockNow() time.Time {
+	p.mu.Lock()
+	now := p.now
+	p.mu.Unlock()
+	if now == nil {
+		return time.Now()
+	}
+	return now()
 }
 
 func (p *pointerRecorder) Events() []recordedPointerEvent {

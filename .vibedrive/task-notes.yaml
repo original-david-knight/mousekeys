@@ -26,3 +26,6 @@ tasks:
     - id: wayland-keyboard-input
       status: done
       notes: 'Peer review fixes applied: fake keymap Offset semantics restored while production fd reads remain offset-independent, sleep-based reuse test made deterministic, and modifier-rejection plus keyboard hub lifecycle tests added. go build ./..., go test ./..., go vet ./..., and CGO_ENABLED=0 go test ./... pass; live Hyprland smoke remains.'
+    - id: wlr-virtual-pointer
+      status: done
+      notes: Implemented direct wlr virtual-pointer synthesis with v2 with-output creation and v1 fallback. Fallback motion offsets local logical targets by the focused output's virtual-layout origin against the full Wayland output layout; recorder and protocol tests cover exact motion/frame/button ordering.

@@ -67,6 +67,7 @@ type WaylandClientBase struct {
 	pointer               *client.Pointer
 	layerShell            *wlr.LayerShell
 	virtualPointerManager *wlr.VirtualPointerManager
+	virtualPointerVersion uint32
 
 	hasCompositor            bool
 	hasShm                   bool
@@ -333,6 +334,7 @@ func (c *WaylandClientBase) handleRegistryGlobal(name uint32, iface string, vers
 			c.hasVirtualPointerManager = true
 			binding.Kind = waylandBindingVirtualPointerManager
 			binding.Version = minUint32(version, waylandVirtualPointerManagerBindVersion)
+			c.virtualPointerVersion = binding.Version
 		}
 	case waylandGlobalXDGOutputManager:
 		if !c.hasXDGOutputManager {
