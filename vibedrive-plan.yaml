@@ -779,7 +779,7 @@ tasks:
 
         Fix regressions before continuing. Do not count source-only tests as the
         final release gate; real Hyprland smoke runs later.
-      status: todo
+      status: done
       workflow: checkpoint
       deps:
         - headless-prd-acceptance-suite

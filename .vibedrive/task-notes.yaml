@@ -53,3 +53,6 @@ tasks:
     - id: real-hyprland-smoke-harness
       status: done
       notes: Added executable real Hyprland smoke harness with service MOUSEKEYS_INSTALL_PATH support, docs, and tests. Live run built/restarted service and correctly failed at real overlay initialization, proving the harness gates live-session failures.
+    - id: basic-flow-checkpoint
+      status: done
+      notes: go build ./..., go vet ./..., go test ./..., and uncached go test -count=1 ./... passed. Targeted headless M K Space flow asserts 3-5 key presses, selected monitor/center trace fields, left-click trace button count/fields, unmap-before-click, and stay-active reset. Built .vibedrive/tmp/mousekeys-basic-flow-checkpoint and verified --help; real Hyprland smoke remains a later gate.

@@ -84,6 +84,21 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		if presses < 3 || presses > 5 {
 			t.Fatalf("pressed key count before first button = %d, want 3-5", presses)
 		}
+		grid, err := NewGridGeometry(monitor, h.config.Grid.Size)
+		if err != nil {
+			t.Fatalf("NewGridGeometry returned error: %v", err)
+		}
+		localX, localY, err := grid.CellCenterLocal(12, 10)
+		if err != nil {
+			t.Fatalf("CellCenterLocal returned error: %v", err)
+		}
+		virtualX, virtualY, err := grid.CellCenterVirtual(12, 10)
+		if err != nil {
+			t.Fatalf("CellCenterVirtual returned error: %v", err)
+		}
+		selected := requireTraceEvent(t, events, traceCoordinateSelected)
+		assertSelectedTraceMonitor(t, selected, monitor)
+		assertSelectedTraceCenter(t, selected, localX, localY, virtualX, virtualY)
 		h.assertTraceContains(traceCoordinateInput, traceCoordinateSelected, traceTimerCreate, traceTimerFire, traceOverlayUnmappedForClick, tracePointerButton, traceClickGroupComplete, traceStayActiveReset)
 		assertOverlayUnmappedForClickBeforePointerButtons(t, events)
 		assertStayActiveResetAfterClickComplete(t, events)
@@ -91,6 +106,7 @@ func TestHeadlessPRDAcceptanceSuite(t *testing.T) {
 		motions := recordedMotionPositions(h.pointer.Events())
 		buttons := recordedButtonEvents(h.pointer.Events())
 		assertButtonClick(t, buttons, PointerButtonLeft, 1, motions[0])
+		assertTraceButtonClick(t, events, PointerButtonLeft, 1, motions[0])
 	})
 
 	t.Run("shift_space_right_click_only", func(t *testing.T) {
@@ -663,6 +679,85 @@ func assertOverlayUnmappedForClickBeforePointerButtons(t *testing.T, events []Tr
 			if !(unmapSeq < unmappedForClickSeq && unmappedForClickSeq < event.Seq) {
 				t.Fatalf("bad click ordering: overlay.unmap=%d overlay.unmapped_for_click=%d pointer.button=%d", unmapSeq, unmappedForClickSeq, event.Seq)
 			}
+		}
+	}
+}
+
+func assertSelectedTraceMonitor(t *testing.T, selected TraceEvent, monitor Monitor) {
+	t.Helper()
+	fields, ok := selected.Fields["monitor"].(map[string]any)
+	if !ok {
+		t.Fatalf("selected trace monitor field = %#v, want object for %+v", selected.Fields["monitor"], monitor)
+	}
+	wants := map[string]any{
+		"name":           monitor.Name,
+		"origin_x":       float64(monitor.OriginX),
+		"origin_y":       float64(monitor.OriginY),
+		"logical_width":  float64(monitor.LogicalWidth),
+		"logical_height": float64(monitor.LogicalHeight),
+		"scale":          monitor.Scale,
+	}
+	for field, want := range wants {
+		if got := fields[field]; got != want {
+			t.Fatalf("selected trace monitor[%s] = %#v, want %#v; fields=%+v", field, got, want, fields)
+		}
+	}
+}
+
+func assertSelectedTraceCenter(t *testing.T, selected TraceEvent, localX, localY, virtualX, virtualY float64) {
+	t.Helper()
+	wants := map[string]float64{
+		"center_local_x":   localX,
+		"center_local_y":   localY,
+		"center_virtual_x": virtualX,
+		"center_virtual_y": virtualY,
+	}
+	for field, want := range wants {
+		if got, ok := selected.Fields[field].(float64); !ok || got != want {
+			t.Fatalf("selected trace %s = %#v, want %v; fields=%+v", field, selected.Fields[field], want, selected.Fields)
+		}
+	}
+}
+
+func assertTraceButtonClick(t *testing.T, events []TraceEvent, button PointerButton, clickCount int, position PointerPosition) {
+	t.Helper()
+	var buttons []TraceEvent
+	for _, event := range events {
+		if event.Event == tracePointerButton {
+			buttons = append(buttons, event)
+		}
+	}
+	if len(buttons) != clickCount*2 {
+		t.Fatalf("trace pointer.button count = %d, want %d for %d click(s): %+v", len(buttons), clickCount*2, clickCount, buttons)
+	}
+	clickGroup := buttons[0].Fields["click_group"]
+	for i, event := range buttons {
+		wantState := string(PointerButtonDown)
+		if i%2 == 1 {
+			wantState = string(PointerButtonUp)
+		}
+		wantSequence := float64(i/2 + 1)
+		if event.Fields["button"] != string(button) || event.Fields["state"] != wantState || event.Fields["click_group"] != clickGroup || event.Fields["click_count"] != float64(clickCount) || event.Fields["sequence"] != wantSequence {
+			t.Fatalf("trace pointer.button[%d] fields = %+v, want %s %s group %v count %d sequence %.0f", i, event.Fields, button, wantState, clickGroup, clickCount, wantSequence)
+		}
+		assertTracePointerPosition(t, event, position)
+	}
+}
+
+func assertTracePointerPosition(t *testing.T, event TraceEvent, position PointerPosition) {
+	t.Helper()
+	fields, ok := event.Fields["position"].(map[string]any)
+	if !ok {
+		t.Fatalf("trace pointer.button position = %#v, want %+v", event.Fields["position"], position)
+	}
+	wants := map[string]any{
+		"x":           position.X,
+		"y":           position.Y,
+		"output_name": position.OutputName,
+	}
+	for field, want := range wants {
+		if got := fields[field]; got != want {
+			t.Fatalf("trace pointer.button position[%s] = %#v, want %#v; fields=%+v", field, got, want, fields)
 		}
 	}
 }
