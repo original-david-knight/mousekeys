@@ -2,3 +2,6 @@ tasks:
     - id: bootstrap-cli-skeleton
       status: done
       notes: 'Stdlib-only Go 1.22 CLI skeleton verified: go test/build pass, help lists commands, daemon validates Hyprland env and persists with valid vars. Use env -u/env -i for missing-env smoke tests in an active session.'
+    - id: test-harness-and-observability
+      status: done
+      notes: Interfaces, deterministic fakes, ARGB helpers, fake timers, and JSONL trace recorder added. go build/test/vet pass; real compositor and installed-service proof remains for the later smoke harness.

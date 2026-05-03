@@ -72,7 +72,7 @@ tasks:
         Headless fakes are required, but they are not the final release gate.
         The later real-hyprland-smoke-harness task must cover installed-service
         and compositor behavior that fakes cannot prove.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

@@ -51,7 +51,8 @@ Commands:
   status   Print local binary status and build metadata.
 
 Environment:
-  MOUSEKEYS_LOG=debug   Enable debug structured logs on stderr.
+  MOUSEKEYS_LOG=debug              Enable debug structured logs on stderr.
+  MOUSEKEYS_TRACE_JSONL=<path>     Append JSONL trace events for tests/smoke checks.
 `)
 }
 
