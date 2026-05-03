@@ -226,7 +226,7 @@ tasks:
         zxdg-output information when needed. Shared client state must be
         concurrency-safe, and roundtrips/event waits need deadlines so tests and
         the daemon cannot hang indefinitely.
-      status: todo
+      status: done
       workflow: implement
       deps:
         - bootstrap-cli-skeleton

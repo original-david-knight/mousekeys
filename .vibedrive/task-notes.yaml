@@ -14,3 +14,6 @@ tasks:
     - id: hyprland-focused-monitor
       status: done
       notes: Implemented Hyprland j/monitors Unix-socket client with typed Monitor mapping, scale normalization, origin preservation, physical dimensions, transform-aware logical axes, and fake-socket success/failure tests. go build ./..., go test ./..., and go vet ./... pass; live raw focused fields matched hyprctl -j monitors.
+    - id: wayland-client-base
+      status: done
+      notes: Pinned go-wayland and scanner; vendored/generated wlroots layer-shell and virtual-pointer bindings. Added deadline-bound Wayland base with required global binding, xdg-output fallback, output matching, clear missing-socket/global/seat errors, and race-safe headless tests.
