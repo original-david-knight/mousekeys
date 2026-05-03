@@ -18,6 +18,7 @@ var (
 	rendererGridHaloColor  = StraightARGB(140, 3, 22, 62)
 	rendererLabelTextColor = StraightARGB(235, 157, 255, 190)
 	rendererLabelHaloColor = StraightARGB(185, 1, 31, 40)
+	rendererColumnFill     = StraightARGB(64, 74, 181, 255)
 )
 
 type RendererStyle struct {
@@ -25,6 +26,23 @@ type RendererStyle struct {
 	GridLineWidth int
 	LabelFontSize int
 	HUDFontSize   int
+}
+
+type CoordinateRenderState struct {
+	Input             string `json:"input,omitempty"`
+	SelectedColumn    int    `json:"selected_column,omitempty"`
+	HasSelectedColumn bool   `json:"has_selected_column,omitempty"`
+}
+
+func (s CoordinateRenderState) HUDText() string {
+	switch len(s.Input) {
+	case 0:
+		return ""
+	case 1:
+		return s.Input + "_"
+	default:
+		return s.Input[:2]
+	}
 }
 
 func RendererStyleFromAppearance(appearance AppearanceConfig) RendererStyle {
@@ -154,14 +172,22 @@ func (r *SoftwareRenderer) glyphBuildCount() int {
 }
 
 func (r *SoftwareRenderer) RenderMainGrid(monitor Monitor, gridSize int) (ARGBSnapshot, error) {
+	return r.RenderCoordinateGrid(monitor, gridSize, CoordinateRenderState{})
+}
+
+func (r *SoftwareRenderer) RenderCoordinateGrid(monitor Monitor, gridSize int, state CoordinateRenderState) (ARGBSnapshot, error) {
 	grid, err := NewGridGeometry(monitor, gridSize)
 	if err != nil {
 		return ARGBSnapshot{}, err
 	}
-	return r.RenderGrid(grid)
+	return r.RenderGridWithState(grid, state)
 }
 
 func (r *SoftwareRenderer) RenderGrid(grid GridGeometry) (ARGBSnapshot, error) {
+	return r.RenderGridWithState(grid, CoordinateRenderState{})
+}
+
+func (r *SoftwareRenderer) RenderGridWithState(grid GridGeometry, state CoordinateRenderState) (ARGBSnapshot, error) {
 	if r == nil {
 		return ARGBSnapshot{}, fmt.Errorf("software renderer is nil")
 	}
@@ -171,12 +197,27 @@ func (r *SoftwareRenderer) RenderGrid(grid GridGeometry) (ARGBSnapshot, error) {
 	if len(grid.Columns) != grid.Size || len(grid.Rows) != grid.Size {
 		return ARGBSnapshot{}, fmt.Errorf("grid geometry has %d columns/%d rows, want %d", len(grid.Columns), len(grid.Rows), grid.Size)
 	}
+	if state.HasSelectedColumn && (state.SelectedColumn < 0 || state.SelectedColumn >= grid.Size) {
+		return ARGBSnapshot{}, fmt.Errorf("selected column %d outside grid size %d", state.SelectedColumn, grid.Size)
+	}
 	canvas, err := newARGBCanvas(grid.Monitor.LogicalWidth, grid.Monitor.LogicalHeight)
 	if err != nil {
 		return ARGBSnapshot{}, err
 	}
-	r.drawGridLines(canvas, grid)
-	r.drawEdgeLabels(canvas, grid)
+	if state.HasSelectedColumn {
+		r.drawDimmedColumns(canvas, grid, state.SelectedColumn)
+		r.drawGridLinesScaled(canvas, grid, 0.24)
+		r.drawEdgeLabelsScaled(canvas, grid, 0.32)
+		r.drawSelectedColumn(canvas, grid, state.SelectedColumn)
+	} else {
+		r.drawGridLines(canvas, grid)
+		r.drawEdgeLabels(canvas, grid)
+	}
+	if hud := state.HUDText(); hud != "" {
+		if err := r.drawHUD(canvas, grid, hud); err != nil {
+			return ARGBSnapshot{}, err
+		}
+	}
 	return canvas.snapshot(), nil
 }
 
@@ -207,10 +248,14 @@ func (r *SoftwareRenderer) RenderHUD(width, height int, text string) (ARGBSnapsh
 }
 
 func (r *SoftwareRenderer) drawGridLines(canvas *argbCanvas, grid GridGeometry) {
+	r.drawGridLinesScaled(canvas, grid, 1)
+}
+
+func (r *SoftwareRenderer) drawGridLinesScaled(canvas *argbCanvas, grid GridGeometry, alphaScale float64) {
 	haloWidth := r.gridHaloWidth()
 	coreWidth := r.style.GridLineWidth
-	halo := scalePixelAlpha(rendererGridHaloColor, r.style.GridOpacity)
-	core := scalePixelAlpha(rendererGridCoreColor, r.style.GridOpacity)
+	halo := scalePixelAlpha(rendererGridHaloColor, r.style.GridOpacity*alphaScale)
+	core := scalePixelAlpha(rendererGridCoreColor, r.style.GridOpacity*alphaScale)
 
 	for i := 0; i <= grid.Size; i++ {
 		x := 0
@@ -241,64 +286,160 @@ func (r *SoftwareRenderer) drawHorizontalStroke(canvas *argbCanvas, center, widt
 }
 
 func (r *SoftwareRenderer) drawEdgeLabels(canvas *argbCanvas, grid GridGeometry) {
+	r.drawEdgeLabelsScaled(canvas, grid, 1)
+}
+
+func (r *SoftwareRenderer) drawEdgeLabelsScaled(canvas *argbCanvas, grid GridGeometry, alphaScale float64) {
 	topRow := grid.Rows[0]
 	bottomRow := grid.Rows[grid.Size-1]
 	leftColumn := grid.Columns[0]
 	rightColumn := grid.Columns[grid.Size-1]
 	radius := r.labelHaloRadius()
+	text := scalePixelAlpha(rendererLabelTextColor, alphaScale)
+	halo := scalePixelAlpha(rendererLabelHaloColor, alphaScale)
 
 	for i := 0; i < grid.Size; i++ {
 		ch := rune(rendererLabelCharacters[i])
 		column := grid.Columns[i]
 		row := grid.Rows[i]
 
-		r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		r.drawGlyphCenteredColored(canvas, r.labelAtlas, ch, Rect{
 			X: column.Start, Y: topRow.Start, Width: column.Size(), Height: topRow.Size(),
-		}, radius)
-		r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		}, radius, text, halo)
+		r.drawGlyphCenteredColored(canvas, r.labelAtlas, ch, Rect{
 			X: column.Start, Y: bottomRow.Start, Width: column.Size(), Height: bottomRow.Size(),
-		}, radius)
-		r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		}, radius, text, halo)
+		r.drawGlyphCenteredColored(canvas, r.labelAtlas, ch, Rect{
 			X: leftColumn.Start, Y: row.Start, Width: leftColumn.Size(), Height: row.Size(),
-		}, radius)
-		r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		}, radius, text, halo)
+		r.drawGlyphCenteredColored(canvas, r.labelAtlas, ch, Rect{
 			X: rightColumn.Start, Y: row.Start, Width: rightColumn.Size(), Height: row.Size(),
-		}, radius)
+		}, radius, text, halo)
 	}
 }
 
 func (r *SoftwareRenderer) drawGlyphCentered(canvas *argbCanvas, atlas *bitmapGlyphAtlas, ch rune, clip Rect, haloRadius int) {
+	r.drawGlyphCenteredColored(canvas, atlas, ch, clip, haloRadius, rendererLabelTextColor, rendererLabelHaloColor)
+}
+
+func (r *SoftwareRenderer) drawGlyphCenteredColored(canvas *argbCanvas, atlas *bitmapGlyphAtlas, ch rune, clip Rect, haloRadius int, text, halo ARGBPixel) {
 	glyph, ok := atlas.glyph(ch)
 	if !ok || clip.Width <= 0 || clip.Height <= 0 {
 		return
 	}
 	x := clip.X + (clip.Width-glyph.width)/2
 	y := clip.Y + (clip.Height-glyph.height)/2
-	r.drawGlyph(canvas, glyph, x, y, clip, haloRadius)
+	r.drawGlyphColored(canvas, glyph, x, y, clip, haloRadius, text, halo)
 }
 
 func (r *SoftwareRenderer) drawText(canvas *argbCanvas, atlas *bitmapGlyphAtlas, text string, x, y int, clip Rect, haloRadius int) {
+	r.drawTextColored(canvas, atlas, text, x, y, clip, haloRadius, rendererLabelTextColor, rendererLabelHaloColor)
+}
+
+func (r *SoftwareRenderer) drawTextColored(canvas *argbCanvas, atlas *bitmapGlyphAtlas, text string, x, y int, clip Rect, haloRadius int, textColor, haloColor ARGBPixel) {
 	cursor := x
 	for _, ch := range text {
 		glyph, ok := atlas.glyph(ch)
 		if !ok {
 			continue
 		}
-		r.drawGlyph(canvas, glyph, cursor, y, clip, haloRadius)
+		r.drawGlyphColored(canvas, glyph, cursor, y, clip, haloRadius, textColor, haloColor)
 		cursor += glyph.width + atlas.spacing()
 	}
 }
 
 func (r *SoftwareRenderer) drawGlyph(canvas *argbCanvas, glyph bitmapGlyph, x, y int, clip Rect, haloRadius int) {
+	r.drawGlyphColored(canvas, glyph, x, y, clip, haloRadius, rendererLabelTextColor, rendererLabelHaloColor)
+}
+
+func (r *SoftwareRenderer) drawGlyphColored(canvas *argbCanvas, glyph bitmapGlyph, x, y int, clip Rect, haloRadius int, textColor, haloColor ARGBPixel) {
 	for dy := -haloRadius; dy <= haloRadius; dy++ {
 		for dx := -haloRadius; dx <= haloRadius; dx++ {
 			if dx == 0 && dy == 0 {
 				continue
 			}
-			canvas.drawGlyphMask(glyph, x+dx, y+dy, clip, rendererLabelHaloColor)
+			canvas.drawGlyphMask(glyph, x+dx, y+dy, clip, haloColor)
 		}
 	}
-	canvas.drawGlyphMask(glyph, x, y, clip, rendererLabelTextColor)
+	canvas.drawGlyphMask(glyph, x, y, clip, textColor)
+}
+
+func (r *SoftwareRenderer) drawDimmedColumns(canvas *argbCanvas, grid GridGeometry, selectedColumn int) {
+	tint := scalePixelAlpha(rendererGridHaloColor, r.style.GridOpacity*0.30)
+	for i, column := range grid.Columns {
+		if i == selectedColumn {
+			continue
+		}
+		canvas.fillRect(column.Start, 0, column.End, canvas.height, tint)
+	}
+}
+
+func (r *SoftwareRenderer) drawSelectedColumn(canvas *argbCanvas, grid GridGeometry, selectedColumn int) {
+	column := grid.Columns[selectedColumn]
+	fill := scalePixelAlpha(rendererColumnFill, r.style.GridOpacity)
+	canvas.fillRect(column.Start, 0, column.End, canvas.height, fill)
+
+	haloWidth := r.gridHaloWidth()
+	coreWidth := r.style.GridLineWidth
+	halo := scalePixelAlpha(rendererGridHaloColor, minFloat64(1.0, r.style.GridOpacity*1.35))
+	core := scalePixelAlpha(rendererGridCoreColor, minFloat64(1.0, r.style.GridOpacity*1.45))
+	for _, x := range []int{column.Start, column.End} {
+		r.drawVerticalStroke(canvas, x, haloWidth, halo)
+		r.drawVerticalStroke(canvas, x, coreWidth, core)
+	}
+	for i := 0; i <= grid.Size; i++ {
+		y := 0
+		if i > 0 {
+			y = grid.Rows[i-1].End
+		}
+		r.drawHorizontalStrokeRange(canvas, y, haloWidth, column.Start, column.End, halo)
+		r.drawHorizontalStrokeRange(canvas, y, coreWidth, column.Start, column.End, core)
+	}
+
+	ch := rune(rendererLabelCharacters[selectedColumn])
+	radius := r.labelHaloRadius()
+	topRow := grid.Rows[0]
+	bottomRow := grid.Rows[grid.Size-1]
+	r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		X: column.Start, Y: topRow.Start, Width: column.Size(), Height: topRow.Size(),
+	}, radius)
+	r.drawGlyphCentered(canvas, r.labelAtlas, ch, Rect{
+		X: column.Start, Y: bottomRow.Start, Width: column.Size(), Height: bottomRow.Size(),
+	}, radius)
+}
+
+func (r *SoftwareRenderer) drawHorizontalStrokeRange(canvas *argbCanvas, center, width, x0, x1 int, color ARGBPixel) {
+	start, end := strokeRange(center, width, canvas.height)
+	canvas.fillRect(x0, start, x1, end, color)
+}
+
+func (r *SoftwareRenderer) drawHUD(canvas *argbCanvas, grid GridGeometry, text string) error {
+	text = strings.Map(func(ch rune) rune {
+		return unicode.ToUpper(ch)
+	}, text)
+	textWidth, textHeight, err := r.textSize(r.hudAtlas, text)
+	if err != nil {
+		return err
+	}
+	margin := maxInt(2, r.style.HUDFontSize/2)
+	x := (canvas.width - textWidth) / 2
+	if x < margin {
+		x = margin
+	}
+	if x+textWidth > canvas.width-margin {
+		x = maxInt(0, canvas.width-margin-textWidth)
+	}
+	bottomReserved := 0
+	if len(grid.Rows) > 0 {
+		bottomReserved = grid.Rows[len(grid.Rows)-1].Size()
+	}
+	y := canvas.height - bottomReserved - textHeight - margin
+	if y < margin {
+		y = maxInt(0, canvas.height-textHeight-margin)
+	}
+	clip := Rect{X: 0, Y: 0, Width: canvas.width, Height: canvas.height}
+	r.drawText(canvas, r.hudAtlas, text, x, y, clip, r.hudHaloRadius())
+	return nil
 }
 
 func (r *SoftwareRenderer) textSize(atlas *bitmapGlyphAtlas, text string) (int, int, error) {
@@ -551,6 +692,13 @@ func minInt(a, b int) int {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minFloat64(a, b float64) float64 {
+	if a < b {
 		return a
 	}
 	return b

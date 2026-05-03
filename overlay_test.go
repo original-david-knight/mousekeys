@@ -19,6 +19,36 @@ func (fixedOverlayRenderer) RenderMainGrid(monitor Monitor, gridSize int) (ARGBS
 	return NewARGBSnapshot(monitor.LogicalWidth, monitor.LogicalHeight, pixels)
 }
 
+type recordingCoordinateOverlayRenderer struct {
+	mu       sync.Mutex
+	states   []CoordinateRenderState
+	monitors []Monitor
+}
+
+func (r *recordingCoordinateOverlayRenderer) RenderMainGrid(monitor Monitor, gridSize int) (ARGBSnapshot, error) {
+	return r.RenderCoordinateGrid(monitor, gridSize, CoordinateRenderState{})
+}
+
+func (r *recordingCoordinateOverlayRenderer) RenderCoordinateGrid(monitor Monitor, gridSize int, state CoordinateRenderState) (ARGBSnapshot, error) {
+	r.mu.Lock()
+	r.states = append(r.states, state)
+	r.monitors = append(r.monitors, monitor)
+	r.mu.Unlock()
+	pixels := make([]ARGBPixel, monitor.LogicalWidth*monitor.LogicalHeight)
+	for i := range pixels {
+		pixels[i] = StraightARGB(64, uint8(len(state.Input)*80), 120, 220)
+	}
+	return NewARGBSnapshot(monitor.LogicalWidth, monitor.LogicalHeight, pixels)
+}
+
+func (r *recordingCoordinateOverlayRenderer) States() []CoordinateRenderState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]CoordinateRenderState, len(r.states))
+	copy(out, r.states)
+	return out
+}
+
 func TestLayerShellOverlayDriverShowHideToggleAndReuseWithFakes(t *testing.T) {
 	driver, wayland, _ := newTestLayerShellOverlayDriver(t, Monitor{
 		Name:          "DP-1",
@@ -53,6 +83,105 @@ func TestLayerShellOverlayDriverShowHideToggleAndReuseWithFakes(t *testing.T) {
 		t.Fatalf("hide response = %+v, want hidden inactive", response)
 	}
 	assertFakeWaylandEventKinds(t, wayland.Events(), "unmap", "destroy")
+}
+
+func TestLayerShellOverlayDriverCoordinateEntryFSMHUDBackspaceSelectionAndReset(t *testing.T) {
+	traceBytes := &lockedTraceBuffer{}
+	trace := NewTraceRecorder(traceBytes, fixedTraceClock(time.Unix(30, 0)))
+	monitor := Monitor{
+		Name:          "DP-1",
+		OriginX:       100,
+		OriginY:       -50,
+		LogicalWidth:  257,
+		LogicalHeight: 193,
+		Scale:         1,
+	}
+	wayland := newFakeWaylandBackend(trace)
+	renderer := &recordingCoordinateOverlayRenderer{}
+	driver, err := newLayerShellOverlayDriver(newFakeHyprlandIPC(monitor), wayland, renderer, DefaultConfig(), trace)
+	if err != nil {
+		t.Fatalf("newLayerShellOverlayDriver returned error: %v", err)
+	}
+	controller := newDaemonController(driver, statusOutput{})
+	wayland.keyboard.Enqueue(
+		KeyboardEvent{Kind: KeyboardEventKeymap, Keymap: &KeyboardKeymapFD{Data: []byte("keymap"), Size: 6}},
+		KeyboardEvent{Kind: KeyboardEventEnter},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "m", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "m", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "/", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "/", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "BackSpace", State: KeyPressed},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "BackSpace", State: KeyReleased},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyPressed, Modifiers: ModifierState{Shift: true}},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "M", State: KeyReleased, Modifiers: ModifierState{Shift: true}},
+		KeyboardEvent{Kind: KeyboardEventModifiers, Modifiers: ModifierState{}},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyPressed, Modifiers: ModifierState{Shift: true}},
+		KeyboardEvent{Kind: KeyboardEventKey, Key: "K", State: KeyReleased, Modifiers: ModifierState{Shift: true}},
+	)
+
+	response := controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active {
+		t.Fatalf("show response = %+v, want active", response)
+	}
+	waitForCondition(t, func() bool { return len(renderer.States()) >= 5 })
+
+	states := renderer.States()
+	if len(states) != 5 {
+		t.Fatalf("coordinate render states = %+v, want initial + M + empty + M + MK only", states)
+	}
+	wantInputs := []string{"", "M", "", "M", "MK"}
+	for i, want := range wantInputs {
+		if states[i].Input != want {
+			t.Fatalf("state[%d].Input = %q, want %q; states=%+v", i, states[i].Input, want, states)
+		}
+	}
+	if states[1].HUDText() != "M_" || !states[1].HasSelectedColumn || states[1].SelectedColumn != 12 {
+		t.Fatalf("first-letter render state = %+v, want selected column M and HUD M_", states[1])
+	}
+	if states[2].HUDText() != "" || states[2].HasSelectedColumn {
+		t.Fatalf("backspace render state = %+v, want reset coordinate input", states[2])
+	}
+	if states[4].HUDText() != "MK" || !states[4].HasSelectedColumn || states[4].SelectedColumn != 12 {
+		t.Fatalf("second-letter render state = %+v, want MK with selected column M", states[4])
+	}
+
+	events := decodeTraceEvents(t, traceBytes.String())
+	selected := requireTraceEvent(t, events, traceCoordinateSelected)
+	if selected.Fields["coordinate"] != "MK" || selected.Fields["column_letter"] != "M" || selected.Fields["row_letter"] != "K" {
+		t.Fatalf("selected-cell trace fields = %+v, want MK/M/K", selected.Fields)
+	}
+	if got := int(selected.Fields["column"].(float64)); got != 12 {
+		t.Fatalf("selected column = %d, want 12", got)
+	}
+	if got := int(selected.Fields["row"].(float64)); got != 10 {
+		t.Fatalf("selected row = %d, want 10", got)
+	}
+	grid, err := NewGridGeometry(monitor, 26)
+	if err != nil {
+		t.Fatalf("NewGridGeometry returned error: %v", err)
+	}
+	wantBounds, err := grid.Cell(12, 10)
+	if err != nil {
+		t.Fatalf("Cell returned error: %v", err)
+	}
+	bounds := selected.Fields["bounds"].(map[string]any)
+	if int(bounds["x"].(float64)) != wantBounds.X || int(bounds["y"].(float64)) != wantBounds.Y ||
+		int(bounds["width"].(float64)) != wantBounds.Width || int(bounds["height"].(float64)) != wantBounds.Height {
+		t.Fatalf("selected bounds = %+v, want %+v", bounds, wantBounds)
+	}
+
+	response = controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || response.Active || response.Action != "hidden" {
+		t.Fatalf("show-toggle response = %+v, want hidden inactive", response)
+	}
+	response = controller.Dispatch(context.Background(), ipcRequest{Command: "show"})
+	if !response.OK || !response.Active || response.Action != "shown" {
+		t.Fatalf("show after toggle response = %+v, want shown active", response)
+	}
+	waitForCondition(t, func() bool { return len(renderer.States()) >= 6 })
+	if last := renderer.States()[5]; last.Input != "" || last.HasSelectedColumn {
+		t.Fatalf("show after reset render state = %+v, want empty coordinate state", last)
+	}
 }
 
 func TestLayerShellOverlayDriverEscapeDestroysSurfaceAndResetsController(t *testing.T) {
@@ -245,4 +374,19 @@ func waitForCondition(t *testing.T, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("condition was not satisfied before timeout")
+}
+
+func requireTraceEvent(t *testing.T, events []TraceEvent, want string) TraceEvent {
+	t.Helper()
+	for _, event := range events {
+		if event.Event == want {
+			return event
+		}
+	}
+	seen := make(map[string]bool)
+	for _, event := range events {
+		seen[event.Event] = true
+	}
+	t.Fatalf("trace missing %q; saw %v", want, sortedKeys(seen))
+	return TraceEvent{}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 )
 
@@ -213,6 +214,78 @@ func TestRendererTransparentCellsCompositeExactlyOverLightAndDark(t *testing.T) 
 	}
 	if got := mustPixelAt(t, darkComposite, lineX, lineY); got == dark {
 		t.Fatalf("grid stroke disappeared on dark composite at %d,%d", lineX, lineY)
+	}
+}
+
+func TestSoftwareRendererCoordinateGridDimsColumnsAndDrawsHUDOnSquareAndNonSquare(t *testing.T) {
+	renderer := mustSoftwareRenderer(t, RendererStyle{
+		GridOpacity:   0.55,
+		GridLineWidth: 2,
+		LabelFontSize: 8,
+		HUDFontSize:   12,
+	})
+
+	for _, monitor := range []Monitor{
+		{Name: "DP-1", LogicalWidth: 260, LogicalHeight: 260, Scale: 1},
+		{Name: "DP-1", LogicalWidth: 257, LogicalHeight: 193, Scale: 1},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", monitor.LogicalWidth, monitor.LogicalHeight), func(t *testing.T) {
+			grid, err := NewGridGeometry(monitor, 26)
+			if err != nil {
+				t.Fatalf("NewGridGeometry returned error: %v", err)
+			}
+
+			mainGrid, err := renderer.RenderMainGrid(monitor, 26)
+			if err != nil {
+				t.Fatalf("RenderMainGrid returned error: %v", err)
+			}
+			coordinateGrid, err := renderer.RenderCoordinateGrid(monitor, 26, CoordinateRenderState{
+				Input:             "M",
+				SelectedColumn:    12,
+				HasSelectedColumn: true,
+			})
+			if err != nil {
+				t.Fatalf("RenderCoordinateGrid returned error: %v", err)
+			}
+			if coordinateGrid.Width != monitor.LogicalWidth || coordinateGrid.Height != monitor.LogicalHeight {
+				t.Fatalf("coordinate snapshot size = %dx%d, want %dx%d", coordinateGrid.Width, coordinateGrid.Height, monitor.LogicalWidth, monitor.LogicalHeight)
+			}
+			if coordinateGrid.StraightHash() == mainGrid.StraightHash() {
+				t.Fatal("coordinate render state did not change the snapshot")
+			}
+
+			selectedX := (grid.Columns[12].Start + grid.Columns[12].End) / 2
+			dimmedX := (grid.Columns[4].Start + grid.Columns[4].End) / 2
+			lineY := grid.Rows[10].Start
+			selectedLine := mustPixelAt(t, coordinateGrid, selectedX, lineY)
+			dimmedLine := mustPixelAt(t, coordinateGrid, dimmedX, lineY)
+			if selectedLine.A() <= dimmedLine.A() {
+				t.Fatalf("selected column line alpha = %d, dimmed column line alpha = %d; want selected brighter", selectedLine.A(), dimmedLine.A())
+			}
+
+			bottomReserved := grid.Rows[len(grid.Rows)-1].Size()
+			hudRect := Rect{
+				X:      monitor.LogicalWidth / 3,
+				Y:      monitor.LogicalHeight - bottomReserved - 36,
+				Width:  monitor.LogicalWidth / 3,
+				Height: 36,
+			}
+			_, _, hud := findPixel(t, coordinateGrid, hudRect, func(pixel ARGBPixel) bool {
+				return pixel.A() > 0 && pixel.G() > pixel.R()+20 && pixel.G() > pixel.B()
+			})
+			if hud.A() == 0 {
+				t.Fatal("did not find HUD foreground for M_")
+			}
+
+			light := coordinateGrid.CompositeOver(StraightARGB(255, 248, 249, 250))
+			dark := coordinateGrid.CompositeOver(StraightARGB(255, 4, 6, 12))
+			if got := mustPixelAt(t, light, selectedX, lineY); got == StraightARGB(255, 248, 249, 250) {
+				t.Fatalf("selected line disappeared on light composite: %#08x", uint32(got))
+			}
+			if got := mustPixelAt(t, dark, selectedX, lineY); got == StraightARGB(255, 4, 6, 12) {
+				t.Fatalf("selected line disappeared on dark composite: %#08x", uint32(got))
+			}
+		})
 	}
 }
 

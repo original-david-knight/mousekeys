@@ -12,6 +12,10 @@ type overlayGridRenderer interface {
 	RenderMainGrid(monitor Monitor, gridSize int) (ARGBSnapshot, error)
 }
 
+type overlayCoordinateGridRenderer interface {
+	RenderCoordinateGrid(monitor Monitor, gridSize int, state CoordinateRenderState) (ARGBSnapshot, error)
+}
+
 type layerShellOverlayDriver struct {
 	mu       sync.Mutex
 	monitor  FocusedMonitorLookup
@@ -24,13 +28,14 @@ type layerShellOverlayDriver struct {
 }
 
 type overlaySession struct {
-	id        int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	monitor   Monitor
-	surface   OverlaySurface
-	keyboard  KeyboardEventSource
-	lifecycle OverlayLifecycleEventSource
+	id         int
+	ctx        context.Context
+	cancel     context.CancelFunc
+	monitor    Monitor
+	surface    OverlaySurface
+	keyboard   KeyboardEventSource
+	lifecycle  OverlayLifecycleEventSource
+	coordinate coordinateEntryState
 }
 
 func newLayerShellOverlayDriver(monitor FocusedMonitorLookup, wayland WaylandOverlayBackend, renderer overlayGridRenderer, config Config, trace *TraceRecorder) (*layerShellOverlayDriver, error) {
@@ -88,7 +93,7 @@ func (d *layerShellOverlayDriver) ShowOverlay(ctx context.Context) error {
 		session.lifecycle = provider.LifecycleEvents()
 	}
 
-	if err := d.configureAndRender(ctx, session, monitor); err != nil {
+	if err := d.configureAndRender(ctx, session, monitor, session.coordinate.RenderState(d.config.Grid.Size)); err != nil {
 		cancel()
 		return errors.Join(err, destroyOverlaySurface(ctx, surface, false))
 	}
@@ -164,9 +169,15 @@ func (d *layerShellOverlayDriver) runKeyboardLoop(session *overlaySession) {
 				"chord":   token.Chord.String(),
 			})
 		}
-		if ok && token.Kind == KeyboardTokenCommand && token.Command == KeyboardCommandExit {
-			_ = d.finishSession(context.Background(), session, overlayCancelEscape, true)
-			return
+		if ok {
+			if err := d.handleKeyboardToken(session, token); err != nil {
+				d.recordOverlayError("coordinate", err)
+				_ = d.finishSession(context.Background(), session, overlayCancelKeyboardDestroy, true)
+				return
+			}
+			if token.Kind == KeyboardTokenCommand && token.Command == KeyboardCommandExit {
+				return
+			}
 		}
 	}
 }
@@ -236,19 +247,121 @@ func (d *layerShellOverlayDriver) reconfigureActiveSession(session *overlaySessi
 		return nil
 	}
 	session.monitor = monitor
+	state := session.coordinate.RenderState(d.config.Grid.Size)
 	d.mu.Unlock()
-	return d.configureAndRender(session.ctx, session, monitor)
+	return d.configureAndRender(session.ctx, session, monitor, state)
 }
 
-func (d *layerShellOverlayDriver) configureAndRender(ctx context.Context, session *overlaySession, monitor Monitor) error {
+func (d *layerShellOverlayDriver) configureAndRender(ctx context.Context, session *overlaySession, monitor Monitor, state CoordinateRenderState) error {
 	if err := session.surface.Configure(ctx, monitor.LogicalWidth, monitor.LogicalHeight, monitor.Scale); err != nil {
 		return err
 	}
-	buffer, err := d.renderer.RenderMainGrid(monitor, d.config.Grid.Size)
+	buffer, err := d.renderGridBuffer(monitor, state)
 	if err != nil {
 		return err
 	}
 	return session.surface.Render(ctx, buffer)
+}
+
+func (d *layerShellOverlayDriver) renderGridBuffer(monitor Monitor, state CoordinateRenderState) (ARGBSnapshot, error) {
+	if renderer, ok := d.renderer.(overlayCoordinateGridRenderer); ok {
+		return renderer.RenderCoordinateGrid(monitor, d.config.Grid.Size, state)
+	}
+	if state.Input != "" || state.HasSelectedColumn {
+		return ARGBSnapshot{}, fmt.Errorf("overlay renderer does not support coordinate render state")
+	}
+	return d.renderer.RenderMainGrid(monitor, d.config.Grid.Size)
+}
+
+func (d *layerShellOverlayDriver) handleKeyboardToken(session *overlaySession, token KeyboardInputToken) error {
+	switch token.Kind {
+	case KeyboardTokenLetter:
+		return d.handleCoordinateLetter(session, token.Letter)
+	case KeyboardTokenCommand:
+		switch token.Command {
+		case KeyboardCommandExit:
+			return d.finishSession(context.Background(), session, overlayCancelEscape, true)
+		case KeyboardCommandBackspace:
+			return d.handleCoordinateBackspace(session)
+		default:
+			return nil
+		}
+	default:
+		return nil
+	}
+}
+
+func (d *layerShellOverlayDriver) handleCoordinateLetter(session *overlaySession, letter string) error {
+	d.mu.Lock()
+	if d.session != session {
+		d.mu.Unlock()
+		return nil
+	}
+	changed, selected := session.coordinate.AddLetter(letter, d.config.Grid.Size)
+	if !changed {
+		d.mu.Unlock()
+		return nil
+	}
+	monitor := session.monitor
+	state := session.coordinate.RenderState(d.config.Grid.Size)
+	input := session.coordinate.Input()
+	var cell selectedCell
+	if selected {
+		grid, err := NewGridGeometry(monitor, d.config.Grid.Size)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		cell, err = session.coordinate.SelectedCell(grid)
+		if err != nil {
+			d.mu.Unlock()
+			return err
+		}
+	}
+	d.mu.Unlock()
+
+	d.trace.Record(traceCoordinateInput, map[string]any{
+		"input": input,
+		"hud":   state.HUDText(),
+	})
+	if selected {
+		d.trace.Record(traceCoordinateSelected, map[string]any{
+			"coordinate":       cell.Coordinate,
+			"column_letter":    cell.ColumnLetter,
+			"row_letter":       cell.RowLetter,
+			"column":           cell.Column,
+			"row":              cell.Row,
+			"bounds":           cell.Bounds,
+			"center_local_x":   cell.CenterLocalX,
+			"center_local_y":   cell.CenterLocalY,
+			"center_virtual_x": cell.CenterVirtualX,
+			"center_virtual_y": cell.CenterVirtualY,
+			"monitor":          monitor,
+		})
+	}
+	return d.configureAndRender(session.ctx, session, monitor, state)
+}
+
+func (d *layerShellOverlayDriver) handleCoordinateBackspace(session *overlaySession) error {
+	d.mu.Lock()
+	if d.session != session {
+		d.mu.Unlock()
+		return nil
+	}
+	if !session.coordinate.Backspace() {
+		d.mu.Unlock()
+		return nil
+	}
+	monitor := session.monitor
+	state := session.coordinate.RenderState(d.config.Grid.Size)
+	input := session.coordinate.Input()
+	d.mu.Unlock()
+
+	d.trace.Record(traceCoordinateInput, map[string]any{
+		"input": input,
+		"hud":   state.HUDText(),
+	})
+	return d.configureAndRender(session.ctx, session, monitor, state)
 }
 
 func (d *layerShellOverlayDriver) finishActiveSession(ctx context.Context, reason overlayCancelReason, unmap bool) error {

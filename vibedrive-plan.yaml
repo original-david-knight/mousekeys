@@ -430,7 +430,7 @@ tasks:
         - Backspace removes the last coordinate letter
         - invalid keys are ignored
         - hide, toggle, Escape, compositor close, and show reset state cleanly
-      status: todo
+      status: done
       workflow: implement
       deps:
         - renderer-font-alpha-and-grid-style

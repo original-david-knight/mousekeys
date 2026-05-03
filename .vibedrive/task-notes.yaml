@@ -29,3 +29,6 @@ tasks:
     - id: wlr-virtual-pointer
       status: done
       notes: Implemented direct wlr virtual-pointer synthesis with v2 with-output creation and v1 fallback. Fallback motion offsets local logical targets by the focused output's virtual-layout origin against the full Wayland output layout; recorder and protocol tests cover exact motion/frame/button ordering.
+    - id: main-grid-coordinate-entry
+      status: done
+      notes: 'Review fixes complete: task-notes entry added, coordinate renderer now covers square and non-square snapshots with light/dark composites, and direct FSM edge tests cover empty Backspace, rejected third letters, and invalid grid letters. Pointer movement/selected-cell outline remain for the next planned task.'
